@@ -6,6 +6,7 @@ from datetime import datetime
 # To visualize the results
 import matplotlib.pyplot as plt
 import seaborn
+import streamlit as st
 import yfinance as yf
 
 
@@ -44,7 +45,7 @@ def display_buy_sell(ticker, trade_mem):
     end = datetime.strptime(str(end), '%Y-%m-%d')
 
     stock = get_price(ticker, start, end)
-    print('Stock prices set')
+
     stock = stock.set_index('Date')
     stock_trades = trade_mem[trade_mem.ticker == ticker]
     stock_trades['action'] = stock_trades.amount.apply(lambda x: -1 if x < 0 else 0 if x == 0 else 1)
@@ -66,4 +67,6 @@ def display_buy_sell(ticker, trade_mem):
     # plt.savefig('pos_neg.png', dpi=200)
     # plt.title(ticker)
     # plt.show()
-    return fig
+    print('plotting')
+    st.pyplot()
+    return True

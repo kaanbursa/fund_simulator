@@ -4,14 +4,16 @@ import sys
 from matplotlib.backends.backend_agg import RendererAgg
 import matplotlib
 import matplotlib.pyplot as plt
-from pages import model_analysis
+from pages import model_analysis, trader
 sys.path.append('./../')
 #from model.models import Trainer, TrainerConfig
 
 PAGES = {
-    "model_analysis": model_analysis,
-}
+    'Trading Dashboard': trader,
+    "Model Analysis Dashboard": model_analysis,
 
+}
+st.set_option('deprecation.showPyplotGlobalUse', False)
 st.sidebar.title('Navigation')
 selection = st.sidebar.radio("Go to", list(PAGES.keys()))
 page = PAGES[selection]
