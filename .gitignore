@@ -1,0 +1,16 @@
+snp45-2000.csv
+snp45_stock.csv
+snp47-2000.csv
+*.csv
+trained_models
+ppo_rec_trade_tensorboard
+tensorboard
+trade_tensorboard
+*_tensorboard
+results
+datasets
+Training
+.ipynb_checkpoints
+*.pyc
+.idea/
+wandb
