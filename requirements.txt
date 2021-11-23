@@ -4,8 +4,8 @@ pandas==1.0.3
 stockstats
 scikit-learn==0.21.1
 gym==0.18.0
-stable-baselines
-tensorflow==1.15.4
+stable-baselines3
+torch
 joblib==0.15.1
 #Pipeline
 apache-airflow==2.0.1
@@ -21,9 +21,12 @@ pytest>=5.3.2,<6.0.0
 setuptools>=41.4.0,<42.0.0
 wheel>=0.33.6,<0.34.0
 yfinance
+ccxt
 pyfolio
 
 # streamlit
-streamlit==0.85.1
+streamlit
+wandb
+finta==1.3
 # streamlit_agraph
 loguru==0.5.3
