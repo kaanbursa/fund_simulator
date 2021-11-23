@@ -337,6 +337,7 @@ class Trainer:
             "train-start": start,
             "train-end": end,
             "env_hparams": "",
+            'date_training':datetime.now()
         }
         if os.path.exists(self.agen_df_path):
             df = pd.read_csv(self.agen_df_path)

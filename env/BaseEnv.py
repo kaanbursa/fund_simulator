@@ -21,7 +21,7 @@ class EnvConfig:
     INDICATORS = indicator_list
     OBSERVATIONS = len(indicator_list) + 2
     INDEX_OBSERVATIONS = 3
-    REWARD_INTERVAL = 1
+    REWARD_INTERVAL = 5
     seed = 42
 
 
@@ -48,6 +48,7 @@ class BaseTradeEnv(gym.Env):
         # It will be updated when the asset is bought ht the price will be stop loss %n of the bought price
         self.stop_loss_prices = [0] * self.stock_dim
         self.shorted = 0
+        self.grade = 0
 
     def _get_observation(self, initial: bool):
         indicators = []
@@ -253,7 +254,7 @@ class BaseTradeEnv(gym.Env):
 
                 self._close_short(index)
 
-    def _calculate_reward(self, initial_balance, begin_total_asset, end_total_asset, grade = 0):
+    def _calculate_reward(self, initial_balance, begin_total_asset, end_total_asset):
         """
         Our reward function defines
         todays total asset - previous total asset) + (sharpe_ratio - 1 ) * scaler
@@ -285,7 +286,7 @@ class BaseTradeEnv(gym.Env):
         # 2. learn to generate alpha
         # 3. optional learn to maximize sharpe
 
-        if grade == 0:
+        if self.grade == 0:
             # Benchmark is buy and hold strategy
             if self.day % self.config.REWARD_INTERVAL == 0:
                 #benchmark = self._alpha(initial_balance)  # returns buy and hold
@@ -295,7 +296,7 @@ class BaseTradeEnv(gym.Env):
                 return reward
             else:
                 return 0
-        elif grade == 1:
+        elif self.grade == 1:
             if self.day % self.config.REWARD_INTERVAL == 0:
                 benchmark = self._alpha(initial_balance)  # returns buy and hold
                 reward = end_total_asset - begin_total_asset  # + ((sharpe) * 5)
@@ -305,7 +306,7 @@ class BaseTradeEnv(gym.Env):
             else:
                 return 0
 
-        elif grade == 2:
+        elif self.grade == 2:
             df_total_value = pd.DataFrame(self.asset_memory)
             df_total_value.columns = ["account_value"]
             df_total_value["daily_return"] = df_total_value.pct_change(1)
