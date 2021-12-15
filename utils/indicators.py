@@ -21,6 +21,14 @@ indicators_stock_stats = [
     "volume_delta",
 ]
 
+day_trade_indicators = [
+    "boll",
+    "boll_ub",
+    "boll_lb",
+    "volume_delta",
+    "volume",
+]
+
 indicator_list = [
     "macd",
     "tema",
