@@ -15,14 +15,15 @@ import matplotlib.pyplot as plt
 class EnvConfig:
     INITIAL_ACCOUNT_BALANCE = 1000000
     HMAX_NORMALIZE = 100
-    REWARD_SCALING = 1e-4 #5e-4
+    REWARD_SCALING = 1e-5 #5e-4
     TRANSACTION_FEE_PERCENT = 0.001
     SHORT_FEE = 0.00005
     INDICATORS = indicator_list
     OBSERVATIONS = len(indicator_list) + 2
     INDEX_OBSERVATIONS = 3
-    REWARD_INTERVAL = 5
+    REWARD_INTERVAL = 3
     seed = 42
+    use_turbulance = False
 
 
 class BaseTradeEnv(gym.Env):
@@ -39,16 +40,19 @@ class BaseTradeEnv(gym.Env):
         #self.index_dim = len(self.index_df.ticker.unique())
 
         obs_shape = 3 + self.stock_dim * self.config.OBSERVATIONS + (self.time_window * 2 * (self.stock_dim + 2)) #+ (self.index_dim * self.config.INDEX_OBSERVATIONS)
-
+        self.state_dim = obs_shape
+        self.action_dim = stock_dim
+        self.max_step = 10000
+        self.if_discrete = False
         self.HMAX_NORMALIZE = self.config.HMAX_NORMALIZE
-        self.observation_space = spaces.Box(low=-100, high=np.inf, shape=(obs_shape,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float32)
         self.trade_memory = [0] * stock_dim
         self.avg_bought_prices = [0] * stock_dim
         self.stop_loss_trigerred = 0
         # It will be updated when the asset is bought ht the price will be stop loss %n of the bought price
         self.stop_loss_prices = [0] * self.stock_dim
         self.shorted = 0
-        self.grade = 0
+        self.grade = 1
 
     def _get_observation(self, initial: bool):
         indicators = []
@@ -115,6 +119,21 @@ class BaseTradeEnv(gym.Env):
 
         return state
 
+    def _calculate_total_asset(self):
+        """
+        Calculates total dollar value of the current portfolio
+        :return: $ amount of the asset
+        """
+        asset = self.state[0] + sum(
+                np.array(self.state[1 : (self.stock_dim + 1)])
+                * np.array(self.state[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)])
+            )
+        return asset
+
+    def log_metrics(self):
+        # TODO: Add histogram of returns
+        raise NotImplementedError
+
     def _sell_stock(self, index, action):
         """
         Sell and short shares
@@ -167,26 +186,26 @@ class BaseTradeEnv(gym.Env):
             # perform buy action based on the sign of the action
             available_amount = max(self.state[0] // self.state[index + 1], 0)
             # print('available_amount:{}'.format(available_amount))
+            if available_amount != 0:
+                amount = min(available_amount, action)
+                # print('available_amount:{}'.format(available_amount))
+                # update balance
+                self.state[0] -= (
+                    self.state[index + 1]
+                    * amount
+                    * (1 + self.config.TRANSACTION_FEE_PERCENT)
+                )
 
-            amount = min(available_amount, action)
-            # print('available_amount:{}'.format(available_amount))
-            # update balance
-            self.state[0] -= (
-                self.state[index + 1]
-                * amount
-                * (1 + self.config.TRANSACTION_FEE_PERCENT)
-            )
+                self.state[index + self.stock_dim + 1] += amount
 
-            self.state[index + self.stock_dim + 1] += amount
+                #self._calculate_avg_bought_price(index, amount)
 
-            #self._calculate_avg_bought_price(index, amount)
-
-            self.cost += (
-                self.state[index + 1]
-                * amount
-                * self.config.TRANSACTION_FEE_PERCENT
-            )
-            self.trades += 1
+                self.cost += (
+                    self.state[index + 1]
+                    * amount
+                    * self.config.TRANSACTION_FEE_PERCENT
+                )
+                self.trades += 1
 
     def _close_short(self, index):
         # Calculate PnL
@@ -293,6 +312,7 @@ class BaseTradeEnv(gym.Env):
                 reward = end_total_asset - begin_total_asset  # + ((sharpe) * 5)
                 # Add alpha to reward or substract
                 #reward += (end_total_asset - benchmark) * 2
+                #print(f'Reward:  {reward} Begin Asset: {begin_total_asset} End Asset: {end_total_asset}')
                 return reward
             else:
                 return 0
@@ -307,18 +327,18 @@ class BaseTradeEnv(gym.Env):
                 return 0
 
         elif self.grade == 2:
-            df_total_value = pd.DataFrame(self.asset_memory)
+            """df_total_value = pd.DataFrame(self.asset_memory)
             df_total_value.columns = ["account_value"]
             df_total_value["daily_return"] = df_total_value.pct_change(1)
             sharpe = (
                     (252 ** 0.5)
                     * df_total_value["daily_return"].mean()
                     / (df_total_value["daily_return"].std() + 0.001)
-            )
+            )"""
             benchmark = self._alpha(initial_balance)  # returns buy and hold
-            reward = end_total_asset - begin_total_asset  + ((sharpe + 1) ** 5)
+            reward = end_total_asset - benchmark # + ((sharpe + 1) ** 5)
             # Add alpha to reward or substract
-            reward += (end_total_asset - benchmark) * 2
+            #reward += (end_total_asset - benchmark) * 2
             return reward
 
 

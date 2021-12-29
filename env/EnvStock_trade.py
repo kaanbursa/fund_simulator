@@ -49,6 +49,7 @@ class StockEnvTrade(BaseTradeEnv):
         self.flag_days = flag_days
         self.env_name = 'trade'
         self.debug = debug
+        self.use_turbulance = config.use_turbulance
 
 
 
@@ -93,31 +94,30 @@ class StockEnvTrade(BaseTradeEnv):
 
     def _sell_stock(self, index, action):
         # perform sell action based on the sign of the action
-        if self.turbulence < self.turbulence_threshold:
-            # State = Assets + [1-STOCKDIM]
-            # Check if you have stock on the state
+        if not self.use_turbulance:
             if self.state[1 + index] > 0 and self.state[index + self.stock_dim + 1] > 0:
                 # Normal long action
                 # update balance
                 amount = min(abs(action), self.state[index + self.stock_dim + 1])
-                #update cash
+                # print('sell amount', amount, action)
+                # update cash
                 self.state[0] += (
-                    self.state[index + 1]
-                    * amount
-                    * (1 - self.config.TRANSACTION_FEE_PERCENT)
+                        self.state[index + 1]
+                        * amount
+                        * (1 - self.config.TRANSACTION_FEE_PERCENT)
                 )
                 # Update your holding on given stock
                 self.state[index + self.stock_dim + 1] -= amount
                 # calculate
                 self.cost += (
-                    self.state[index + 1]
-                    * amount
-                    * self.config.TRANSACTION_FEE_PERCENT
+                        self.state[index + 1]
+                        * amount
+                        * self.config.TRANSACTION_FEE_PERCENT
                 )
                 trade_vals = {
                     "Date": self.date,
                     "ticker": self.tickers[index],
-                    "amount":  -1*amount,
+                    "amount": -1 * amount,
                     "price": self.state[index + 1],
                 }
                 self.trade_memory.append(trade_vals)
@@ -126,65 +126,100 @@ class StockEnvTrade(BaseTradeEnv):
 
             else:
                 pass
-
         else:
-            # if turbulence goes over threshold, just clear out all positions
-            self.turbulanced_days += 1
-            if self.state[index + self.stock_dim + 1] > 0:
-                # update balance
-                self.state[0] += (
-                    self.state[index + 1]
-                    * self.state[index + self.stock_dim + 1]
-                    * (1 - self.config.TRANSACTION_FEE_PERCENT)
-                )
-                self.state[index + self.stock_dim + 1] = 0
-                self.cost += (
-                    self.state[index + 1]
-                    * self.state[index + self.stock_dim + 1]
-                    * self.config.TRANSACTION_FEE_PERCENT
-                )
-                trade_vals = {
-                    "Date": self.date,
-                    "ticker": self.tickers[index],
-                    "amount":  self.state[index + self.stock_dim + 1],
-                    "price": self.state[index + 1],
-                }
-                self.trade_memory.append(trade_vals)
+            if self.turbulence < self.turbulence_threshold:
+                # State = Assets + [1-STOCKDIM]
+                # Check if you have stock on the state
+                if self.state[1 + index] > 0 and self.state[index + self.stock_dim + 1] > 0:
+                    # Normal long action
+                    # update balance
+                    amount = min(abs(action), self.state[index + self.stock_dim + 1])
+                    # print('sell amount', amount, action)
+                    # update cash
+                    self.state[0] += (
+                            self.state[index + 1]
+                            * amount
+                            * (1 - self.config.TRANSACTION_FEE_PERCENT)
+                    )
+                    # Update your holding on given stock
+                    self.state[index + self.stock_dim + 1] -= amount
+                    # calculate
+                    self.cost += (
+                            self.state[index + 1]
+                            * amount
+                            * self.config.TRANSACTION_FEE_PERCENT
+                    )
+                    trade_vals = {
+                        "Date": self.date,
+                        "ticker": self.tickers[index],
+                        "amount": -1 * amount,
+                        "price": self.state[index + 1],
+                    }
+                    self.trade_memory.append(trade_vals)
+                    if amount != 0:
+                        self.trades += 1
 
-                self.trades += 1
+                else:
+                    pass
 
-            elif self.state[index + self.stock_dim + 1] < 0:
-                print(self.turbulence)
-                print('Holding negative')
-                print(self.state[: 1 + self.stock_dim *2])
-                #self._close_short(index)
-                pass
+            else:
+                # if turbulence goes over threshold, just clear out all positions
+                self.turbulanced_days += 1
+                if self.state[index + self.stock_dim + 1] > 0:
+                    # update balance
+                    self.state[0] += (
+                            self.state[index + 1]
+                            * self.state[index + self.stock_dim + 1]
+                            * (1 - self.config.TRANSACTION_FEE_PERCENT)
+                    )
+                    self.state[index + self.stock_dim + 1] = 0
+                    self.cost += (
+                            self.state[index + 1]
+                            * self.state[index + self.stock_dim + 1]
+                            * self.config.TRANSACTION_FEE_PERCENT
+                    )
+                    trade_vals = {
+                        "Date": self.date,
+                        "ticker": self.tickers[index],
+                        "amount": -1 * self.state[index + self.stock_dim + 1],
+                        "price": self.state[index + 1],
+                    }
+                    self.trade_memory.append(trade_vals)
 
-        holdings = self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)]
-        if any(i < 0 for i in holdings):
-            print('After sell')
-            print('Sold index is', index)
-            print(holdings)
-            print('Holdings contains negative holdings')
+                    self.trades += 1
+
+                elif self.state[index + self.stock_dim + 1] < 0:
+                    print(self.turbulence)
+                    print('Holding negative')
+                    print(self.state[: 1 + self.stock_dim * 2])
+                    # self._close_short(index)
+                    pass
+
+            holdings = self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)]
+            if any(i < 0 for i in holdings):
+                print('After sell')
+                print('Sold index is', index)
+                print(holdings)
+                print('Holdings contains negative holdings')
 
 
     def _buy_stock(self, index, action):
         # perform buy action based on the sign of the action
-        if self.turbulence < self.turbulence_threshold:
-            if self.state[1 + index] > 0:
-                available_amount = max(self.state[0] // self.state[index + 1],0)
-                # print('available_amount:{}'.format(available_amount))
-
+        if not self.use_turbulance:
+            available_amount = max(self.state[0] // self.state[index + 1], 0)
+            # print('available_amount:{}'.format(available_amount))
+            if available_amount != 0:
                 amount = min(available_amount, action)
+                # print('Buy amount', amount, action)
                 # update balance
                 self.state[0] -= (
-                    self.state[index + 1]
-                    * amount
-                    * (1 + self.config.TRANSACTION_FEE_PERCENT)
+                        self.state[index + 1]
+                        * amount
+                        * (1 + self.config.TRANSACTION_FEE_PERCENT)
                 )
                 self.state[index + self.stock_dim + 1] += amount
                 self.cost += (
-                    self.state[index + 1] * amount * self.config.TRANSACTION_FEE_PERCENT
+                        self.state[index + 1] * amount * self.config.TRANSACTION_FEE_PERCENT
                 )
                 trade_vals = {
                     "Date": self.date,
@@ -198,10 +233,40 @@ class StockEnvTrade(BaseTradeEnv):
                     self.trades += 1
 
         else:
-            # if turbulence goes over threshold, just stop buying
-            self.turbulanced_days += 1
+            if self.turbulence < self.turbulence_threshold:
+                if self.state[1 + index] > 0:
+                    available_amount = max(self.state[0] // self.state[index + 1], 0)
+                    # print('available_amount:{}'.format(available_amount))
+                    if available_amount != 0:
+                        amount = min(available_amount, action)
+                        #print('Buy amount', amount, action)
+                        # update balance
+                        self.state[0] -= (
+                            self.state[index + 1]
+                            * amount
+                            * (1 + self.config.TRANSACTION_FEE_PERCENT)
+                        )
+                        self.state[index + self.stock_dim + 1] += amount
+                        self.cost += (
+                            self.state[index + 1] * amount * self.config.TRANSACTION_FEE_PERCENT
+                        )
+                        trade_vals = {
+                            "Date": self.date,
+                            "ticker": self.tickers[index],
+                            "amount": amount,
+                            "price": self.state[index + 1],
+                        }
+
+                        self.trade_memory.append(trade_vals)
+                        if amount != 0:
+                            self.trades += 1
+
+            else:
+                # if turbulence goes over threshold, just stop buying
+                self.turbulanced_days += 1
 
     def _log_portfolio(self):
+        # TODO: Add histogram of returns to the base
         end_total_asset = self.state[0] + sum(
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
@@ -230,6 +295,9 @@ class StockEnvTrade(BaseTradeEnv):
 
 
     def step(self, actions):
+
+        """if sorted(list(set(actions))) == [-1.0, 1.0]:
+            print('actions include only -1 and 1')"""
 
         self.terminal = self.day >= len(self.df.index.unique()) - 1
 
@@ -303,7 +371,7 @@ class StockEnvTrade(BaseTradeEnv):
 
         else:
             # print(np.array(self.state[1:29]))
-
+            #print(actions[:3])
             actions = actions * self.HMAX_NORMALIZE
             if self.debug:
                 print('====DEBUG====')
@@ -362,6 +430,7 @@ class StockEnvTrade(BaseTradeEnv):
             self.data = self.df.loc[self.day, :]
             self.past_data = self.df.loc[self.day - self.time_window: self.day, ['adjcp', 'volume']]
             self.index = self.index_df.loc[self.day, :]
+            self.state = self._get_observation(initial=False)
 
             end_total_asset = self.state[0] + sum(
                 np.array(self.state[1: (self.stock_dim + 1)])
@@ -387,9 +456,6 @@ class StockEnvTrade(BaseTradeEnv):
 
             # load next state
             # print("stock_shares:{}".format(self.state[29:]))
-
-            self.state = self._get_observation(initial=False)
-
 
             self.asset_memory.append(end_total_asset)
 
@@ -434,6 +500,7 @@ class StockEnvTrade(BaseTradeEnv):
                     self.previous_state[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)]
                 )
             )
+            print(len(self.previous_state))
             self.asset_memory = [previous_total_asset]
             # self.asset_memory = [self.previous_state[0]]
             self.day = 0  + self.time_window
@@ -441,6 +508,7 @@ class StockEnvTrade(BaseTradeEnv):
 
             self.date_memory = [self.date]
             self.data = self.df.loc[self.day, :]
+
             self.past_data = self.df.loc[self.day - self.time_window: self.day, ['adjcp', 'volume']]
             self.index = self.index_df.loc[self.day, :]
             self.turbulence = 0
@@ -466,6 +534,7 @@ class StockEnvTrade(BaseTradeEnv):
                     + [self.data.month.values.tolist()[0]]
                     + [self.data.day.values.tolist()[0]]
                 )
+
             else:
                 self.state = (
                         [self.previous_state[0]]
@@ -492,6 +561,7 @@ class StockEnvTrade(BaseTradeEnv):
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
         )
+        print(self.day)
         return self.state, {'end_total_asset':end_total_asset}
 
     def _seed(self, seed=None):

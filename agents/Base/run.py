@@ -78,7 +78,7 @@ class Arguments:  # [ElegantRL.2021.10.21]
         assert isinstance(self.state_dim, int) or isinstance(self.state_dim, tuple)
         assert isinstance(self.action_dim, int)
         assert isinstance(self.if_discrete, bool)
-        assert isinstance(self.target_return, int) or isinstance(self.target_return, float)
+        #assert isinstance(self.target_return, int) or isinstance(self.target_return, float)
 
         '''agent'''
         assert hasattr(self.agent, 'init')
@@ -121,7 +121,8 @@ def train_and_evaluate(args, learner_id=0):
 
     env = build_env(env=args.env, if_print=False, device_id=args.eval_gpu_id, env_num=args.env_num)
     if env.env_num == 1:
-        agent.states = [env.reset(), ]
+        agent.states = [np.array(env.reset()), ]
+        #print(agent.states)
         assert isinstance(agent.states[0], np.ndarray)
         assert agent.states[0].shape == (env.state_dim,)
     else:
@@ -139,6 +140,7 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init ReplayBuffer'''
     if args.if_off_policy:
+
         buffer = ReplayBuffer(max_len=args.max_memo, state_dim=env.state_dim,
                               action_dim=1 if env.if_discrete else env.action_dim,
                               if_use_per=args.if_per_or_gae, gpu_id=args.learner_gpus[learner_id])
@@ -178,6 +180,7 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init ReplayBuffer after training start'''
     if agent.if_off_policy:
+
         if_load = buffer.save_or_load_history(cwd, if_save=False)
 
         if not if_load:
@@ -188,13 +191,17 @@ def train_and_evaluate(args, learner_id=0):
     '''start training loop'''
     if_train = True
     while if_train:
+
         with torch.no_grad():
             traj_list = agent.explore_env(env, target_step, reward_scale, gamma)
+
             steps, r_exp = update_buffer(traj_list)
 
         logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
+        print(logging_tuple[0])
         with torch.no_grad():
             temp = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
+            print()
             if_reach_goal, if_save = temp
             if_train = not ((if_allow_break and if_reach_goal)
                             or evaluator.total_step > break_step

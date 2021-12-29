@@ -4,7 +4,7 @@ import torch
 import numpy as np
 
 
-class Evaluator:  # [ElegantRL.2021.10.13]
+class Evaluator:
     def __init__(self, cwd, agent_id, eval_env, eval_gap, eval_times1, eval_times2, target_return, if_overwrite):
         self.recorder = list()  # total_step, r_avg, r_std, obj_c, ...
         self.recorder_path = f'{cwd}/recorder.npy'
@@ -16,7 +16,7 @@ class Evaluator:  # [ElegantRL.2021.10.13]
         self.eval_times1 = eval_times1
         self.eval_times2 = eval_times2
         self.if_overwrite = if_overwrite
-        self.target_return = target_return
+        self.target_return = None
 
         self.r_max = -np.inf
         self.eval_time = 0
@@ -62,21 +62,29 @@ class Evaluator:  # [ElegantRL.2021.10.13]
             self.recorder.append((self.total_step, r_avg, r_std, r_exp, *log_tuple))  # update recorder
 
             '''print some information to Terminal'''
-            if_reach_goal = bool(self.r_max > self.target_return)  # check if_reach_goal
-            if if_reach_goal and self.used_time is None:
-                self.used_time = int(time.time() - self.start_time)
-                print(f"{'ID':<3}{'Step':>8}{'TargetR':>8} |"
-                      f"{'avgR':>8}{'stdR':>7}{'avgS':>7}{'stdS':>6} |"
-                      f"{'UsedTime':>8}  ########\n"
-                      f"{self.agent_id:<3}{self.total_step:8.2e}{self.target_return:8.2f} |"
-                      f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
-                      f"{self.used_time:>8}  ########")
+            if self.target_return is not None:
+                if_reach_goal = bool(self.r_max > self.target_return)  # check if_reach_goal
+                if if_reach_goal and self.used_time is None:
+                    self.used_time = int(time.time() - self.start_time)
+                    print(f"{'ID':<3}{'Step':>8}{'TargetR':>8} |"
+                          f"{'avgR':>8}{'stdR':>7}{'avgS':>7}{'stdS':>6} |"
+                          f"{'UsedTime':>8}  ########\n"
+                          f"{self.agent_id:<3}{self.total_step:8.2e}{self.target_return:8.2f} |"
+                          f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
+                          f"{self.used_time:>8}  ########")
 
-            print(f"{self.agent_id:<3}{self.total_step:8.2e}{self.r_max:8.2f} |"
-                  f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
-                  f"{r_exp:8.2f}{''.join(f'{n:7.2f}' for n in log_tuple)}")
-            self.draw_plot()
-        return if_reach_goal, if_save
+                print(f"{self.agent_id:<3}{self.total_step:8.2e}{self.r_max:8.2f} |"
+                      f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
+                      f"{r_exp:8.2f}{''.join(f'{n:7.2f}' for n in log_tuple)}")
+                self.draw_plot()
+                print('target return not noone')
+                return if_reach_goal, if_save
+            #TODO: Change this to mormal
+
+            else:
+
+                return False, False
+
 
     @staticmethod
     def get_r_avg_std_s_avg_std(rewards_steps_list):

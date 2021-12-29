@@ -1,5 +1,5 @@
 import torch
-from agents.Base.BaseAgent import AgentDDPG, AgentPPO #AgentSAC, AgentTD3, AgentA2C
+from agents.Base.BaseAgent import AgentDDPG, AgentPPO#, #AgentSAC, AgentTD3, AgentA2C
 from agents.Base.run import Arguments, train_and_evaluate
 
 
@@ -41,7 +41,6 @@ class DRLAgent:
             "index_df":self.data,
             "stock_dim":30,
             "config":self.config,
-
         }
         env = self.env(**env_config)
         env.env_num = 1

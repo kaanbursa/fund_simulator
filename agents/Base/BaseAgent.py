@@ -2,7 +2,7 @@ import os
 import torch
 import numpy as np
 import numpy.random as rd
-
+from tqdm import tqdm
 from copy import deepcopy
 from torch.nn.utils import clip_grad_norm_
 from agents.Base.network import QNet, QNetDuel
@@ -61,6 +61,7 @@ class AgentBase:
         # self.amp_scale = torch.cuda.amp.GradScaler()
         self.traj_list = [list() for _ in range(env_num)]
         self.device = torch.device(f"cuda:{gpu_id}" if (torch.cuda.is_available() and (gpu_id >= 0)) else "cpu")
+        print('Using device: ', self.device)
 
         self.cri = self.ClassCri(int(net_dim * 1.25), state_dim, action_dim).to(self.device)
         self.act = self.ClassAct(net_dim, state_dim, action_dim).to(self.device) if self.ClassAct else self.cri
@@ -69,7 +70,8 @@ class AgentBase:
 
         self.cri_optim = torch.optim.Adam(self.cri.parameters(), learning_rate)
         self.act_optim = torch.optim.Adam(self.act.parameters(), learning_rate) if self.ClassAct else self.cri
-        del self.ClassCri, self.ClassAct
+
+        assert isinstance(if_per_or_gae, bool)
 
         if env_num == 1:
             self.explore_env = self.explore_one_env
@@ -101,7 +103,9 @@ class AgentBase:
         state = self.states[0]
         traj = list()
         for _ in range(target_step):
+
             ten_state = torch.as_tensor(state, dtype=torch.float32)
+
             ten_action = self.select_actions(ten_state.unsqueeze(0))[0]
             action = ten_action.numpy()
             next_s, reward, done, _ = env.step(action)
@@ -545,6 +549,7 @@ class AgentPPO(AgentBase):
     def init(self, net_dim=256, state_dim=8, action_dim=2,
              learning_rate=1e-4, if_per_or_gae=False, env_num=1, gpu_id=0):
         AgentBase.init(self, net_dim, state_dim, action_dim, learning_rate, if_per_or_gae, env_num, gpu_id)
+        print('Actiondim', action_dim)
         self.traj_list = [list() for _ in range(env_num)]
         self.env_num = env_num
 
@@ -557,13 +562,25 @@ class AgentPPO(AgentBase):
         else:
             self.explore_env = self.explore_vec_env
 
-    def select_action(self, state: torch.Tensor) -> tuple:
+    def select_action(self, state: np.ndarray) -> np.ndarray:
         """
-                Select actions given an array of states.
+                Select action give a state.
 
                 :param states[np.ndarray]: an array of states in a shape (batch_size, state_dim, ).
                 :return: an array of actions in a shape (batch_size, action_dim, ) where each action is clipped into range(-1, 1).
                 """
+        s_tensor = torch.as_tensor(state[np.newaxis], device=self.device)
+        a_tensor = self.act(s_tensor)
+        action = a_tensor.detach().cpu().numpy()
+        return action
+
+    def select_actions(self, state: torch.Tensor) -> torch.Tensor:
+        """
+            Select actions given an array of states.
+
+            :param states[np.ndarray]: an array of states in a shape (batch_size, state_dim, ).
+            :return: an array of actions in a shape (batch_size, action_dim, ) where each action is clipped into range(-1, 1).
+        """
         state = state.to(self.device)
         action, noise = self.act.get_action(state)
         return action.detach().cpu(), noise.detach().cpu()
@@ -583,11 +600,19 @@ class AgentPPO(AgentBase):
 
         last_done = 0
         traj = list()
+
         for step_i in range(target_step):
+
             ten_states = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+
+
             ten_actions, ten_noises = self.select_actions(ten_states)
+
             action = ten_actions[0].numpy()
-            next_s, reward, done, _ = env.step(np.tanh(action))
+
+            next_s, reward, done, _ = env.step(np.tanh(action)) # Error at 82th step
+
+
 
             traj.append((ten_states, reward, done, ten_actions, ten_noises))
             if done:
@@ -603,21 +628,22 @@ class AgentPPO(AgentBase):
 
     def explore_vec_env(self, env, target_step, reward_scale, gamma):
         """
-                Collect trajectories through the actor-environment interaction for a **vectorized** environment instance.
+            Collect trajectories through the actor-environment interaction for a **vectorized** environment instance.
 
-                :param env[object]: the DRL environment instance.
-                :param target_step[int]: the total step for the interaction.
-                :param reward_scale[float]: a reward scalar to clip the reward.
-                :param gamma[float]: the discount factor.
-                :return: a list of trajectories [traj, ...] where each trajectory is a list of transitions [(state, other), ...].
-                """
+            :param env[object]: the DRL environment instance.
+            :param target_step[int]: the total step for the interaction.
+            :param reward_scale[float]: a reward scalar to clip the reward.
+            :param gamma[float]: the discount factor.
+            :return: a list of trajectories [traj, ...] where each trajectory is a list of transitions [(state, other), ...].
+        """
         ten_states = self.states
 
         env_num = len(self.traj_list)
         traj_list = [list() for _ in range(env_num)]  # [traj_env_0, ..., traj_env_i]
         last_done_list = [0 for _ in range(env_num)]
 
-        for step_i in range(target_step):
+        for step_i in tqdm(range(target_step)):
+
             ten_actions, ten_noises = self.select_actions(ten_states)
             tem_next_states, ten_rewards, ten_dones = env.step(ten_actions.tanh())
 
@@ -667,6 +693,7 @@ class AgentPPO(AgentBase):
         obj_actor = None
         update_times = int(buf_len / batch_size * repeat_times)
         for update_i in range(1, update_times + 1):
+
             indices = torch.randint(buf_len, size=(batch_size,), requires_grad=False, device=self.device)
 
             state = buf_state[indices]
@@ -674,7 +701,6 @@ class AgentPPO(AgentBase):
             adv_v = buf_adv_v[indices]
             action = buf_action[indices]
             logprob = buf_logprob[indices]
-
 
             """ PPO Surrogate objective of Trust Region"""
 
@@ -688,6 +714,7 @@ class AgentPPO(AgentBase):
 
             value = self.cri(state).squeeze(1)  # critic network predicts the reward_sum (Q value) of state
             obj_critic = self.criterion(value, r_sum) / (r_sum.std() + 1e-6)
+
             self.optim_update(self.cri_optim, obj_critic, self.cri.parameters())
             self.soft_update(self.cri_target, self.cri, soft_update_tau) if self.cri_target is not self.cri else None
 
@@ -756,6 +783,7 @@ class AgentPPO(AgentBase):
         :param gamma[float]: the discount factor.
         :return: a trajectory list.
         """
+
         for traj in traj_list:
             temp = list(map(list, zip(*traj)))  # 2D-list transpose
 
@@ -766,6 +794,7 @@ class AgentPPO(AgentBase):
             ten_noise = torch.stack(temp[4])
 
             traj[:] = (ten_state, ten_reward, ten_mask, ten_action, ten_noise)
+
         return traj_list
 
 

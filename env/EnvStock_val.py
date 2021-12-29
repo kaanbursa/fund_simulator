@@ -165,8 +165,8 @@ class StockEnvValidation(BaseTradeEnv):
         # print(actions)
 
         if self.terminal:
-
-            return self.state, self.reward, self.terminal, {}
+            ending_asset = self._calculate_total_asset()
+            return self.state, self.reward, self.terminal, {'total_asset': ending_asset}
 
         else:
             # print(np.array(self.state[1:29]))
@@ -217,6 +217,7 @@ class StockEnvValidation(BaseTradeEnv):
             self.data = self.df.loc[self.day, :].dropna(subset=["ticker"])
             self.past_data = self.df.loc[self.day - self.time_window: self.day, ['adjcp', 'volume']]
             self.index = self.index_df.loc[self.day, :]
+            self.state = self._get_observation(initial=False)
 
             end_total_asset = self.state[0] + sum(
                 np.array(self.state[1: (self.stock_dim + 1)])
@@ -229,11 +230,11 @@ class StockEnvValidation(BaseTradeEnv):
             # print(self.turbulence)
             # load next state
 
-            self.state = self._get_observation(initial=False)
+
 
             # Calculate holdings for shorting cost and fee
 
-            self.HMAX_NORMALIZE = self.config.HMAX_NORMALIZE if end_total_asset < self.config.INITIAL_ACCOUNT_BALANCE else self.config.HMAX_NORMALIZE * (end_total_asset // self.config.INITIAL_ACCOUNT_BALANCE)
+            #self.HMAX_NORMALIZE = self.config.HMAX_NORMALIZE if end_total_asset < self.config.INITIAL_ACCOUNT_BALANCE else self.config.HMAX_NORMALIZE * (end_total_asset // self.config.INITIAL_ACCOUNT_BALANCE)
 
             self.asset_memory.append(end_total_asset)
             # print("end_total_asset:{}".format(end_total_asset))
@@ -265,7 +266,8 @@ class StockEnvValidation(BaseTradeEnv):
         return self.state
 
     def render(self, mode="human", close=False):
-        return self.state, self.trades
+        ending_asset = self._calculate_total_asset()
+        return self.state, self.trades, ending_asset
 
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)

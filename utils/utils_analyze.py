@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from datetime import datetime
 import glob
 import yfinance as yf
 import re
@@ -43,11 +44,13 @@ def calculate_holdings(df):
         df.iloc[i, 4] = df.iloc[:i, 2].sum()
     return df
 
-def get_price(ticker):
-    stock = yf.Ticker(ticker)
-    df = stock.history(period="max").reset_index()
-    df['Adj Close'] = df['Close']
-    df['ticker'] = ticker
+def get_price(ticker, start, end=datetime.now()):
+    df = yf.download(ticker, start=start, end=end).reset_index()
+    #df = stock.history(start=start, end=end)
+    #Calculate ADJ Close
+    #df = calculate_adjusted_close_prices_iterative(df, 'Close').reset_index()
+
+    df["ticker"] = ticker
     return df
 
 def check_index_dim(df_non_zero,index_dim, indexes):
