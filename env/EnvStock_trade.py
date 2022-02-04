@@ -4,7 +4,7 @@ import matplotlib
 import numpy as np
 import pandas as pd
 from gym.utils import seeding
-import streamlit as st
+#import streamlit as st
 from datetime import datetime
 #from loguru import logger
 #import plotly.express as px
@@ -50,6 +50,8 @@ class StockEnvTrade(BaseTradeEnv):
         self.env_name = 'trade'
         self.debug = debug
         self.use_turbulance = config.use_turbulance
+        self.initial_total_asset = self.config.INITIAL_ACCOUNT_BALANCE
+        self.action_memory = []
 
 
 
@@ -91,16 +93,20 @@ class StockEnvTrade(BaseTradeEnv):
         self._seed()
         self.model_name = model_name
         self.iteration = iteration
+        self.total_buy_orders = 0
+        self.total_sell_orders = 0
 
     def _sell_stock(self, index, action):
         # perform sell action based on the sign of the action
         if not self.use_turbulance:
             if self.state[1 + index] > 0 and self.state[index + self.stock_dim + 1] > 0:
+
                 # Normal long action
                 # update balance
                 amount = min(abs(action), self.state[index + self.stock_dim + 1])
                 # print('sell amount', amount, action)
                 # update cash
+
                 self.state[0] += (
                         self.state[index + 1]
                         * amount
@@ -123,6 +129,7 @@ class StockEnvTrade(BaseTradeEnv):
                 self.trade_memory.append(trade_vals)
                 if amount != 0:
                     self.trades += 1
+                    self.total_sell_orders += 1
 
             else:
                 pass
@@ -206,31 +213,33 @@ class StockEnvTrade(BaseTradeEnv):
     def _buy_stock(self, index, action):
         # perform buy action based on the sign of the action
         if not self.use_turbulance:
-            available_amount = max(self.state[0] // self.state[index + 1], 0)
-            # print('available_amount:{}'.format(available_amount))
-            if available_amount != 0:
-                amount = min(available_amount, action)
-                # print('Buy amount', amount, action)
-                # update balance
-                self.state[0] -= (
-                        self.state[index + 1]
-                        * amount
-                        * (1 + self.config.TRANSACTION_FEE_PERCENT)
-                )
-                self.state[index + self.stock_dim + 1] += amount
-                self.cost += (
-                        self.state[index + 1] * amount * self.config.TRANSACTION_FEE_PERCENT
-                )
-                trade_vals = {
-                    "Date": self.date,
-                    "ticker": self.tickers[index],
-                    "amount": amount,
-                    "price": self.state[index + 1],
-                }
+            if self.state[1 + index] > 0:
+                available_amount = max(self.state[0] // self.state[index + 1], 0)
+                # print('available_amount:{}'.format(available_amount))
+                if available_amount != 0:
+                    amount = min(available_amount, action)
+                    # print('Buy amount', amount, action)
+                    # update balance
+                    self.state[0] -= (
+                            self.state[index + 1]
+                            * amount
+                            * (1 + self.config.TRANSACTION_FEE_PERCENT)
+                    )
+                    self.state[index + self.stock_dim + 1] += amount
+                    self.cost += (
+                            self.state[index + 1] * amount * self.config.TRANSACTION_FEE_PERCENT
+                    )
+                    trade_vals = {
+                        "Date": self.date,
+                        "ticker": self.tickers[index],
+                        "amount": amount,
+                        "price": self.state[index + 1],
+                    }
 
-                self.trade_memory.append(trade_vals)
-                if amount != 0:
-                    self.trades += 1
+                    self.trade_memory.append(trade_vals)
+                    if amount != 0:
+                        self.trades += 1
+                        self.total_buy_orders += 1
 
         else:
             if self.turbulence < self.turbulence_threshold:
@@ -260,6 +269,7 @@ class StockEnvTrade(BaseTradeEnv):
                         self.trade_memory.append(trade_vals)
                         if amount != 0:
                             self.trades += 1
+                            self.total_buy_orders += 1
 
             else:
                 # if turbulence goes over threshold, just stop buying
@@ -286,11 +296,13 @@ class StockEnvTrade(BaseTradeEnv):
                 - self.asset_memory[0]
             )
         )
+        self.total_asset = end_total_asset
         print(f"Total cash is: {self.state[0]}$ and total holdings in stocks are {end_total_asset - self.state[0]}$")
         print("Buy & Hold strategy with previous total asset: ", self._calculate_buy_and_hold(self.asset_memory[0]))
         print("Total Cost: ", self.cost)
         print("Sum of rewards ", sum(self.rewards_memory))
         print("Total trades: ", self.trades)
+        print(f"Total buy orders are {self.total_buy_orders} and total sell orders are {self.total_sell_orders}")
         print("Total days in turbulance: ", self.turbulanced_days)
 
 
@@ -315,7 +327,7 @@ class StockEnvTrade(BaseTradeEnv):
                 df = pd.read_csv(path)
                 df = df.append(df_total_value, ignore_index=True)
                 df.to_csv(path, index=False)
-                st.line_chart(df)
+                #st.line_chart(df)
 
             else:
 
@@ -392,8 +404,8 @@ class StockEnvTrade(BaseTradeEnv):
             argsort_actions = np.argsort(actions)
 
             sell_index = argsort_actions[: np.where(actions < 0)[0].shape[0]]
-            buy_index = argsort_actions[::-1][: np.where(actions > 0)[0].shape[0]]
 
+            buy_index = argsort_actions[::-1][: np.where(actions > 0)[0].shape[0]]
 
             # TODO: If it is flag day dont buy or sell at that day
             self.date = pd.to_datetime(self.unique_trade_date[self.day + 1], format="%Y-%m-%d")
@@ -425,6 +437,8 @@ class StockEnvTrade(BaseTradeEnv):
                     # print('take buy action: {}'.format(actions[index]))
                     self._buy_stock(index, actions[index])
 
+            self.action_memory.append(actions)
+
             self.day += 1
 
             self.data = self.df.loc[self.day, :]
@@ -436,6 +450,7 @@ class StockEnvTrade(BaseTradeEnv):
                 np.array(self.state[1: (self.stock_dim + 1)])
                 * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
             )
+            self.total_asset = end_total_asset
             holdings = self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)]
             if self.debug:
                 print('===DEBUG TRADING ENV===')
@@ -444,9 +459,9 @@ class StockEnvTrade(BaseTradeEnv):
                     print('Actions before negative holdings were', actions)
                     print('Holdings are ', holdings)
                     print('For given period the prices were', self.state[1: (self.stock_dim + 1)])
-            if any(i < 0 for i in holdings):
+            if sum(n < 0 for n in holdings) > 0:
+                print('NEGAITVE NUMBER is contained in holdings')
                 print(self.day)
-                print('Holdings contains negative holdings')
             self.reward = self._calculate_reward(self.asset_memory[0], begin_total_asset, end_total_asset)
 
 
@@ -462,14 +477,13 @@ class StockEnvTrade(BaseTradeEnv):
             self.date_memory.append(self.date)
 
             # print("end_total_asset:{}".format(end_total_asset))
-
-
             # print("step_reward:{}".format(self.reward))
             self.rewards_memory.append(self.reward)
 
             self.reward = self.reward * self.config.REWARD_SCALING
             #For tensor callback
             #self.total_asset = end_total_asset
+
 
         return self.state, self.reward, self.terminal, {}
 
@@ -491,8 +505,10 @@ class StockEnvTrade(BaseTradeEnv):
             # self.iteration=self.iteration
             self.rewards_memory = []
             # initiate state
-
+            self.action_memory = []
             self.state = self._get_observation(initial=True)
+            self.total_buy_orders = 0
+            self.total_sell_orders = 0
         else:
             previous_total_asset = self.previous_state[0] + sum(
                 np.array(self.previous_state[1 : (self.stock_dim + 1)])
@@ -500,7 +516,7 @@ class StockEnvTrade(BaseTradeEnv):
                     self.previous_state[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)]
                 )
             )
-            print(len(self.previous_state))
+
             self.asset_memory = [previous_total_asset]
             # self.asset_memory = [self.previous_state[0]]
             self.day = 0  + self.time_window
@@ -517,6 +533,7 @@ class StockEnvTrade(BaseTradeEnv):
             self.terminal = False
             # self.iteration=iteration
             self.rewards_memory = []
+            self.action_memory = []
 
 
             indicators = []
@@ -549,7 +566,8 @@ class StockEnvTrade(BaseTradeEnv):
                         + [self.data.month.values.tolist()[0]]
                         + [self.data.day.values.tolist()[0]]
                 )
-
+            self.total_buy_orders = 0
+            self.total_sell_orders = 0
             if self.debug:
                 print('====DEBUG TRADE ENV====')
                 print('After reset:', self.state)
@@ -561,7 +579,8 @@ class StockEnvTrade(BaseTradeEnv):
             np.array(self.state[1: (self.stock_dim + 1)])
             * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
         )
-        print(self.day)
+        #TODO: Render Action memory
+
         return self.state, {'end_total_asset':end_total_asset}
 
     def _seed(self, seed=None):

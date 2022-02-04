@@ -63,6 +63,7 @@ class AgentBase:
         self.device = torch.device(f"cuda:{gpu_id}" if (torch.cuda.is_available() and (gpu_id >= 0)) else "cpu")
         print('Using device: ', self.device)
 
+
         self.cri = self.ClassCri(int(net_dim * 1.25), state_dim, action_dim).to(self.device)
         self.act = self.ClassAct(net_dim, state_dim, action_dim).to(self.device) if self.ClassAct else self.cri
         self.cri_target = deepcopy(self.cri) if self.if_use_cri_target else self.cri
@@ -165,6 +166,7 @@ class AgentBase:
         `return tuple` training logging. tuple = (float, float, ...)
         """
 
+
     def optim_update(self, optimizer, objective, params):
         optimizer.zero_grad()
         objective.backward()
@@ -208,6 +210,7 @@ class AgentBase:
 
         if if_save:
             for name, obj in name_obj_list:
+
                 save_path = f"{cwd}/{name}.pth"
                 torch.save(obj.state_dict(), save_path)
         else:
@@ -549,7 +552,7 @@ class AgentPPO(AgentBase):
     def init(self, net_dim=256, state_dim=8, action_dim=2,
              learning_rate=1e-4, if_per_or_gae=False, env_num=1, gpu_id=0):
         AgentBase.init(self, net_dim, state_dim, action_dim, learning_rate, if_per_or_gae, env_num, gpu_id)
-        print('Actiondim', action_dim)
+
         self.traj_list = [list() for _ in range(env_num)]
         self.env_num = env_num
 
@@ -600,8 +603,8 @@ class AgentPPO(AgentBase):
 
         last_done = 0
         traj = list()
-
-        for step_i in range(target_step):
+        step = 0
+        while step < target_step:
 
             ten_states = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
 
@@ -617,9 +620,10 @@ class AgentPPO(AgentBase):
             traj.append((ten_states, reward, done, ten_actions, ten_noises))
             if done:
                 state = env.reset()
-                last_done = step_i
+                last_done = step
             else:
                 state = next_s
+                step += 1
 
         self.states[0] = state
 
@@ -675,9 +679,9 @@ class AgentPPO(AgentBase):
         """
 
         with torch.no_grad():
-            buf_len = buffer[0].shape[0]
+            #buf_len = buffer[0].shape[0]
             buf_state, buf_reward, buf_mask, buf_action, buf_noise = [ten.to(self.device) for ten in buffer]
-
+            buf_len = buf_state.shape[0]
             '''get buf_r_sum, buf_logprob'''
             bs = 2 ** 10  # set a smaller 'BatchSize' when out of GPU memory.
             buf_value = [self.cri_target(buf_state[i:i + bs]) for i in range(0, buf_len, bs)]
@@ -691,7 +695,10 @@ class AgentPPO(AgentBase):
 
         obj_critic = None
         obj_actor = None
+        print( 'Buf len', buf_len, 'Batch size: ', batch_size)
+        assert buf_len >= batch_size, 'buf len bigger than batch size'
         update_times = int(buf_len / batch_size * repeat_times)
+        print('Update times', update_times)
         for update_i in range(1, update_times + 1):
 
             indices = torch.randint(buf_len, size=(batch_size,), requires_grad=False, device=self.device)

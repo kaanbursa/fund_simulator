@@ -60,7 +60,8 @@ class BaseTradeEnv(gym.Env):
         for ind in self.config.INDICATORS:
             #TODO: get rid of this
             inds = self.data[ind].values.tolist()
-            assert len(inds) == self.stock_dim, 'stock dimension does not match indicator dimension'
+
+            assert len(inds) == self.stock_dim, f'stock dimension does not match indicator dimension for stocks {self.df.loc[self.day -1].ticker.unique()}'
             indicators.extend(self.data[ind].values.tolist())
         if self.time_window == 0:
             if initial:
@@ -266,11 +267,14 @@ class BaseTradeEnv(gym.Env):
 
     def _close_all_positions(self):
         for index in range(self.stock_dim):
-            if self.state[index + self.stock_dim + 1] > 0:
+            available_amount = self.state[index + self.stock_dim + 1]
+            if available_amount > 0:
                 # Sell all available stock
-                self._sell_stock(index, self.state[index + self.stock_dim + 1]) # index, action
-            elif self.state[index + self.stock_dim + 1] < 0: #TODO:  if short is allowed change dimension of this code
 
+
+                self._sell_stock(index, available_amount) # index, action
+            elif self.state[index + self.stock_dim + 1] < 0: #TODO:  if short is allowed change dimension of this code
+                print('Closing short error')
                 self._close_short(index)
 
     def _calculate_reward(self, initial_balance, begin_total_asset, end_total_asset):
@@ -304,7 +308,8 @@ class BaseTradeEnv(gym.Env):
         # 1. learn to sell for profit
         # 2. learn to generate alpha
         # 3. optional learn to maximize sharpe
-
+        cash_penatly = 0.3
+        self.cash = self.state[0]
         if self.grade == 0:
             # Benchmark is buy and hold strategy
             if self.day % self.config.REWARD_INTERVAL == 0:
@@ -313,6 +318,9 @@ class BaseTradeEnv(gym.Env):
                 # Add alpha to reward or substract
                 #reward += (end_total_asset - benchmark) * 2
                 #print(f'Reward:  {reward} Begin Asset: {begin_total_asset} End Asset: {end_total_asset}')
+                if self.cash < end_total_asset * 0.05:
+                    #reward -= abs(reward) * 0.6 # Penalty if cash is less than 5 percent of portfolio
+                    reward = - 500
                 return reward
             else:
                 return 0
@@ -322,6 +330,8 @@ class BaseTradeEnv(gym.Env):
                 reward = end_total_asset - begin_total_asset  # + ((sharpe) * 5)
                 # Add alpha to reward or substract
                 reward += (end_total_asset - benchmark) * 2
+                """if self.cash < end_total_asset * 0.05:
+                    reward -= abs(reward) * 0.6"""
                 return reward
             else:
                 return 0
@@ -367,6 +377,7 @@ class BaseTradeEnv(gym.Env):
         pass
 
     def _calculate_buy_and_hold(self, account_balance):
+        #TODO: Add for change trading days
         ticker_len = len(self.df.ticker.unique())
         coin_balance = float(account_balance) / ticker_len
 

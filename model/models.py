@@ -76,8 +76,7 @@ class Trainer:
         population = 5,
         env_config=EnvConfig,
         debug = False,
-            tensorboard=False,
-
+        tensorboard=False,
     ):
         model_dict = {"PPO": PPO, "A2C": A2C, 'DDPG':DDPG, 'TD3':TD3, 'DQN':DQN, 'SAC':SAC}
         self.model_type = model
@@ -228,9 +227,11 @@ class Trainer:
         obs_trade = env_trade.reset()
 
         for i in range(len(trade_data.index.unique())):
+
             action, _states = model.predict(obs_trade)
 
             obs_trade, rewards, dones, info = env_trade.step(action)
+
             total_reward = sum(rewards)
             self.total_reward += sum(rewards)
 
@@ -301,11 +302,14 @@ class Trainer:
         :return:
         """
         total_rewards = []
+        #asset_list = []
         for i in range(len(test_data.Date.unique())):
             action, _states = model.predict(test_obs)
             test_obs, rewards, dones, info = test_env.step(action)
             total_rewards.append(sum(rewards))
+            #asset_list.append(info['end_total_asset'])
             if i == (len(test_data.Date.unique()) - 2):
+
                 _, trades, end_total_asset = test_env.render()
 
         mean_reward, std_reward = evaluate_policy(model, test_env, n_eval_episodes=5)
@@ -447,7 +451,7 @@ class Trainer:
         start_date = self.config.start_date
         processed_path = f"datasets/{self.dataset_version}_processed.csv"
         if os.path.exists(processed_path):
-            print('Loading processed path')
+            print('The dataset has been made before starting training :)')
 
             self.dataset = pd.read_csv(processed_path, parse_dates=['Date'], date_parser=date_parse, index_col=0)
             self.dataset = self.dataset.sort_values(['Date', 'ticker']).reset_index(drop=True)
@@ -459,7 +463,7 @@ class Trainer:
             self.dates_to_change = []
 
             #TODO: Change the ending date
-            while year_date <= datetime.strptime('2020-12-28','%Y-%m-%d'):
+            while year_date <= datetime.strptime('2021-01-28','%Y-%m-%d'):
                 # Get first date in dataframe after stocks are released for changing
                 if year_date > datetime.today():
                     break
@@ -475,12 +479,14 @@ class Trainer:
                     self.dataset.Date <= pd.to_datetime(datetime.now()))].Date.unique()
 
             self.train_with_cluster(
+                self.dataset,
                 normalize=normalize
             )
         else:
             print('Loading all symbols')
-            total_number_tickers = stocks_per_cluster * number_of_clusters
+            total_number_tickers = stocks_per_cluster * number_of_clusters # total number of ticker for given time
             df = self.stocks
+
             # filter unexisting stocks with dates
             year_date = datetime.strptime(start_date, "%Y-%m-%d")
             end_date = datetime.today()
@@ -502,36 +508,38 @@ class Trainer:
             # 2: Filter existing stocks in given period
             self.dataset = pd.DataFrame()
             periods = {}
-            for i,day in enumerate(days[:-1]):
+            for i,day in enumerate(days[:-2]):
                 # filter data
                 # 3: Apply Clustering for creating uncorelated stocks and
                 st_day = pd.to_datetime(day)
-                to_date = pd.to_datetime(days[i + 1]) # For clustering period
-                start_str = str(st_day.year) + '_' + str(st_day.month)
-                end_str = str(to_date.year) + '_' + str(to_date.month)
-                dataset_name = f"{self.dataset_version}_from_{start_str}_to_{end_str}"
+                to_start_trade_date = pd.to_datetime(days[i + 1]) # For clustering period for given stocks
+                period_end_date = to_start_trade_date + timedelta(days=period)
+                # For naming the dataset we start from the ending of clustering period to the next year
+                start_str = str(to_start_trade_date.year) + '_' + str(to_start_trade_date.month)
+                end_str = str(period_end_date.year) + '_' + str(period_end_date.month)
+                dataset_name = f"{self.dataset_version}_from_{start_str}_to_{end_str}" #
                 if os.path.exists("./datasets/" + dataset_name + ".csv"):
                     print('Loading existing dataset')
                     new_dataset = pd.read_csv("./datasets/" + dataset_name + ".csv", parse_dates=['Date'], date_parser=date_parse, index_col=0)
-                    new_dataset = new_dataset[new_dataset.Date > to_date]
+                    new_dataset = new_dataset[new_dataset.Date > to_start_trade_date]
                     self.dataset = pd.concat([self.dataset, new_dataset])
                     continue
                 print(f'Clustering stocks for the periord {str(days[i])} - {str(days[i + 1])}')
                 # To date is when these stocks will end
 
-                clustered_stocks, training_df = get_clustered_stocks(df, st_day, to_date, number_of_clusters)
+                clustered_stocks, training_df = get_clustered_stocks(df, st_day, to_start_trade_date, number_of_clusters)
 
                 # 4: pick stocks with metrics.
                 # TODO: try different metrics
 
-                stocks_to_train = pick_from_kmeans_cluster(clustered_stocks, training_df)
+                stocks_to_train = pick_from_kmeans_cluster(clustered_stocks, training_df, n_from_each=stocks_per_cluster)
 
-                assert len(set(stocks_to_train)) == total_number_tickers, 'Total number of ticker per period does not match the training stock size'
-                print('Stocks to train during these days are', stocks_to_train, 'Adding indicators for next period')
-                # 5: add indicators to selected stocks
-                to_date = pd.to_datetime(to_date)
-                period_end_date = to_date + timedelta(days=period)
-                start_day_for_indicators = to_date - timedelta(days=60)
+                assert len(set(stocks_to_train)) == total_number_tickers, f'Total number of ticker per period does not match the training stock size {len(set(stocks_to_train))} : {total_number_tickers}'
+                print('Stocks to train during these days are: ', stocks_to_train, 'Adding indicators for next period')
+                # 5: add indicators to selected stocks which has been picked from the previous year
+
+
+                start_day_for_indicators = to_start_trade_date - timedelta(days=180)
 
                 periods[i] = stocks_to_train
 
@@ -539,7 +547,8 @@ class Trainer:
                                                                   ticker_list=stocks_to_train, index_list=[],
                                                                   indicators_stock_stats=self.config.indicators_stock_stats,
                                                                   start_date= start_day_for_indicators, end_date =period_end_date)
-                new_dataset = new_dataset[new_dataset.Date > to_date]
+                assert len(new_dataset.ticker.unique()) == total_number_tickers, f'Failed to load some of the symbols'
+                new_dataset = new_dataset[new_dataset.Date > to_start_trade_date]
 
                 self.index_df = index_df
 
@@ -550,7 +559,7 @@ class Trainer:
                 # 2 seperate dataset for training session
                 # 3 setup a way to sell all previous tickers by changing last state ensemble
 
-                self.dates_to_change.append(days[i+1])
+                #self.dates_to_change.append(days[i+1])
             # 4: Preprocess and add indicators to prices
             # 5: Train and save the model
             # Repeat 2 - 5 until periods ends
@@ -568,6 +577,7 @@ class Trainer:
                     self.dataset.Date <= pd.to_datetime(end_date))].Date.unique()
 
             self.train_with_cluster(
+                self.dataset,
                 normalize=normalize
             )
 
@@ -711,12 +721,19 @@ class Trainer:
         return model_path
 
 
-    def train_with_cluster(self, load=False, model_to_load='', normalize: bool = False) -> None:
+    def train_with_cluster(self, dataset, load=False, model_to_load='', normalize: bool = False) -> None:
 
         """assert set(self.dataset.Date.unique()) == set(
             self.index_df.Date.unique()
         ), "Dataset sizes dont match" """
-
+        if isinstance(dataset, str):
+            date_parse = lambda x: pd.to_datetime(x)
+            self.dataset_version = dataset
+            self.dataset = pd.read_csv(dataset, parse_dates=['Date'], date_parser=date_parse)
+            self.dataset = self.dataset[self.dataset.Date >= self.config.start_date]
+        else:
+            self.dataset = dataset[dataset.Date >= self.config.start_date]
+        self.unique_trade_date = self.dataset[self.dataset.Date >= self.config.start_trade].Date.unique()
         timesteps = self.timesteps
         self.last_state_ensemble = []
 
@@ -724,6 +741,7 @@ class Trainer:
         model_use = []
         # based on the analysis of the in-sample data
         # turbulence_threshold = 140
+
 
         insample_turbulence = self.dataset[
             (self.dataset.Date < self.config.end_date)
@@ -835,10 +853,31 @@ class Trainer:
                 ],
                 end=end,
             )"""
+            if not hasattr(self,'dates_to_change'):
+                start_date = self.config.start_date
+                period = 365
+                year_date = datetime.strptime(start_date, "%Y-%m-%d")
+                end_date = datetime.today()
+                delta = timedelta(days=period)
+                days = []
+                self.dates_to_change = []
+
+                sample_df = get_price('AAPL', start_date, end_date)
+
+                while year_date <= end_date:
+                    if year_date > datetime.today():
+                        break
+
+                    date_to_change = sample_df[sample_df.Date < year_date].Date.values[-1]
+                    self.dates_to_change.append(date_to_change)
+                    days.append(date_to_change)
+                    year_date += delta
+
 
             env_train, env_val = self._get_envs(train, validation, stock_dimension, i, turbulence_threshold, normalize, dates_to_change=self.dates_to_change)
 
             obs_val = env_val.reset()
+
             ############## Training and Validation starts ##############
 
             end_date = self.unique_trade_date[
@@ -857,61 +896,81 @@ class Trainer:
             winner_hparams = dict()
             initial_reward = True
             hparams = self.config.hparams
+            seed = hparams['seed']
             for agent in range(self.population):
-                if self.population > 1: # If Population based training is being used
+                # hparams["learning_rate"] = sched_LR.value
+                try:
+                    model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load,
+                                                     model_to_load=model_to_load)
+                    # TODO: Try different seasons for validations pick the top reward
+                    total_reward = 0
+                    # Validation For different market conditions
+                    # TODO: Change to framed conditional training for validation
+                    # ====================================
+                    """validation_frames = 1
+                    S = len(validation) // validation_frames
+                    N = int(len(validation) / S)
+                    frames = [validation.iloc[i * S:(i + 1) * S].copy() for i in range(N + 1)]
+                    for i,data in enumerate(frames):"""
 
-                    #hparams["learning_rate"] = sched_LR.value
-                    model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load, model_to_load=model_to_load)
+                    _, env_val = self._get_envs(train, validation, stock_dimension, i,
+                                                turbulence_threshold, normalize)
                     print(
-                        "======Recurrent PPO Validation from: ",
-                        self.unique_trade_date[
-                            i - self.config.rebalance_window - self.config.validation_window
-                        ],
+                        f"======{self.model_name} Validation from: ",
+                        validation['Date'].iloc[0],
                         "to ",
-                        self.unique_trade_date[i - self.config.rebalance_window],
+                        validation['Date'].iloc[-1],
                     )
-                    total_reward, end_total_asset = self.DRL_validation(
+                    obs_val = env_val.reset()
+                    period_reward, end_total_asset = self.DRL_validation(
                         model=model_rec_ppo,
                         test_data=validation,
                         test_env=env_val,
                         test_obs=obs_val,
                     )
+                    print(f'Reward for the period is {period_reward}')
+                    total_reward += end_total_asset
 
-                    if total_reward > reward or initial_reward:
-                        print(f"Agent #{agent} has better performance for the training period with total reward: {total_reward}")
+                    if total_reward > reward:
+                        print(
+                            f"Agent #{agent} has better performance for the training period with total reward: {total_reward}")
                         reward = total_reward
                         winner = model_rec_ppo
                         winner_hparams = hparams
-                        initial_reward = False
+                    # ====================================
                     hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
-                else: # Use optuna for hyperparameter tuning
-                    #model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
-                    #study = optuna.create_study()
-                    #study.optimize(self.optimize_train, n_trials=100)
-                    winner = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
-                    winner_hparams = hparams
-                    print('Best params, ', winner_hparams)
-                    print(
-                        "======Recurrent PPO Validation from: ",
-                        self.unique_trade_date[
-                            i - self.config.rebalance_window - self.config.validation_window
-                            ],
-                        "to ",
-                        self.unique_trade_date[i - self.config.rebalance_window],
-                    )
-                    total_reward, end_total_asset = self.DRL_validation(
-                        model=winner,
-                        test_data=validation,
-                        test_env=env_val,
-                        test_obs=obs_val,
-                    )
+                    hparams['seed'] = seed
+                    hparams['device'] = 'cuda'
+                except:
+                    print('Model destabilized with params: '
+                          , ' Creating new params')
+                    hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
 
+                    hparams['seed'] = seed
+            else:  # Use optuna for hyperparameter tuning
+                # model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
+                # study = optuna.create_study()
+                # study.optimize(self.optimize_train, n_trials=100)
+                obs_val = env_val.reset()
+                hparams = self.config.hparams
+                winner = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
+                winner_hparams = hparams
 
-
-
+                print(
+                    "======Recurrent PPO Validation from: ",
+                    self.unique_trade_date[
+                        i - self.config.rebalance_window - self.config.validation_window
+                        ],
+                    "to ",
+                    self.unique_trade_date[i - self.config.rebalance_window],
+                )
+                total_reward, end_total_asset = self.DRL_validation(
+                    model=winner,
+                    test_data=validation,
+                    test_env=env_val,
+                    test_obs=obs_val,
+                )
                 print("Total reward at validation for Reccurent PPO", total_reward)
-                sharpe_rec_ppo = get_validation_sharpe(i)
-                print("Sharpe Ratio: ", sharpe_rec_ppo)
             self._save_model_info(
                 winner_hparams,
                 reward,
@@ -920,7 +979,7 @@ class Trainer:
             )
             self.config.hparams = winner_hparams
             # ppo_sharpe_list.append(sharpe_ppo)
-            rec_ppo_sharpe_list.append(sharpe_rec_ppo)
+            #rec_ppo_sharpe_list.append(sharpe_rec_ppo)
 
             # Model Selection based on sharpe ratio
             # if (sharpe_ppo >= sharpe_a2c):
@@ -1015,6 +1074,8 @@ class Trainer:
         #sched_LR = LinearSchedule(total_timesteps, 0.0005, 0.00001)
 
         start = time.time()
+
+
         for i in range(
             self.config.rebalance_window + self.config.validation_window + time_frame,
             len(self.unique_trade_date),

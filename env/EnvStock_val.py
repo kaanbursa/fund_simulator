@@ -244,7 +244,7 @@ class StockEnvValidation(BaseTradeEnv):
 
             self.reward = self.reward * self.config.REWARD_SCALING
 
-        return self.state, self.reward, self.terminal, {}
+        return self.state, self.reward, self.terminal, {'end_total_asset':end_total_asset}
 
     def reset(self):
         self.asset_memory = [self.config.INITIAL_ACCOUNT_BALANCE]

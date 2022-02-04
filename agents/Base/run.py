@@ -14,14 +14,16 @@ from agents.Base.evaluator import Evaluator
 
 
 class Arguments:  # [ElegantRL.2021.10.21]
-    def __init__(self, env, agent):
-        self.env = env  # the environment for training
-        self.env_num = getattr(env, 'env_num', 1)  # env_num = 1. In vector env, env_num > 1.
-        self.max_step = getattr(env, 'max_step', None)  # the max step of an episode
-        self.state_dim = getattr(env, 'state_dim', None)  # vector dimension (feature number) of state
-        self.action_dim = getattr(env, 'action_dim', None)  # vector dimension (feature number) of action
-        self.if_discrete = getattr(env, 'if_discrete', None)  # discrete or continuous action space
-        self.target_return = getattr(env, 'target_return', None)  # target average episode return
+    def __init__(self, env_train, env_val, agent):
+        self.env = env_train  # the environment for training
+
+        # Val env and train env are same they just have difference in visualizaitons
+        self.env_num = getattr(env_train, 'env_num', 1)  # env_num = 1. In vector env, env_num > 1.
+        self.max_step = getattr(env_train, 'max_step', None)  # the max step of an episode
+        self.state_dim = getattr(env_train, 'state_dim', None)  # vector dimension (feature number) of state
+        self.action_dim = getattr(env_train, 'action_dim', None)  # vector dimension (feature number) of action
+        self.if_discrete = getattr(env_train, 'if_discrete', None)  # discrete or continuous action space
+        self.target_return = getattr(env_train, 'target_return', None)  # target average episode return
 
         self.agent = agent  # Deep Reinforcement Learning algorithm
         self.if_off_policy = agent.if_off_policy  # agent is on-policy or off-policy
@@ -59,7 +61,7 @@ class Arguments:  # [ElegantRL.2021.10.21]
         self.break_step = +np.inf  # break training after 'total_step > break_step'
         self.if_allow_break = True  # allow break training when reach goal (early termination)
 
-        self.eval_env = None  # the environment for evaluating. None means set automatically.
+        self.eval_env = env_val  # the environment for evaluating. None means set automatically.
         self.eval_gap = 2 ** 8  # evaluate the agent per eval_gap seconds
         self.eval_times1 = 2 ** 2  # number of times that get episode return in first
         self.eval_times2 = 2 ** 4  # number of times that get episode return in second
@@ -114,6 +116,7 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init: Agent'''
     agent = args.agent
+
     agent.init(net_dim=args.net_dim, gpu_id=args.learner_gpus[learner_id],
                state_dim=args.state_dim, action_dim=args.action_dim, env_num=args.env_num,
                learning_rate=args.learning_rate, if_per_or_gae=args.if_per_or_gae)
@@ -157,6 +160,7 @@ def train_and_evaluate(args, learner_id=0):
 
         def update_buffer(_traj_list):
             (ten_state, ten_reward, ten_mask, ten_action, ten_noise) = _traj_list[0]
+
             buffer[:] = (ten_state.squeeze(1),
                          ten_reward,
                          ten_mask,
@@ -190,6 +194,7 @@ def train_and_evaluate(args, learner_id=0):
 
     '''start training loop'''
     if_train = True
+
     while if_train:
 
         with torch.no_grad():
@@ -197,21 +202,27 @@ def train_and_evaluate(args, learner_id=0):
 
             steps, r_exp = update_buffer(traj_list)
 
+        print('Steps ',steps)
         logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
-        print(logging_tuple[0])
-        with torch.no_grad():
-            temp = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
-            print()
-            if_reach_goal, if_save = temp
-            if_train = not ((if_allow_break and if_reach_goal)
-                            or evaluator.total_step > break_step
-                            or os.path.exists(f'{cwd}/stop'))
 
-    print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd}')
+        with torch.no_grad():
+
+            if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
+
+            if_train = if_reach_goal
+
+            """if_train = not ((if_allow_break and if_reach_goal)
+                            or evaluator.total_step > break_step
+                            or os.path.exists(f'{cwd}/stop'))"""
+
+    print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd} | Total Step: {steps}')
 
     agent.save_or_load_agent(cwd, if_save=True)
     buffer.save_or_load_history(cwd, if_save=True) if agent.if_off_policy else None
     evaluator.save_or_load_recoder(if_save=True)
+
+    #TODO: returns tuple for avg reards and max reward
+    return r_avg, r_max
 
 
 def get_step_r_exp(ten_reward):

@@ -75,6 +75,8 @@ class StockEnvTrain(BaseTradeEnv):
         else:
             #print(actions[:4])
             actions = actions * self.HMAX_NORMALIZE
+            if np.isnan(actions).any():
+                print(f'actions are nan, in {self.day} and actions are {actions}, state is : {self.state}')
 
             # actions = (actions.astype(int))
 
@@ -87,6 +89,7 @@ class StockEnvTrain(BaseTradeEnv):
             argsort_actions = np.argsort(actions[: self.stock_dim])
 
             sell_index = argsort_actions[: np.where(actions < 0)[0].shape[0]]
+
             buy_index = argsort_actions[::-1][: np.where(actions > 0)[0].shape[0]]
 
             today = pd.to_datetime(self.unique_trade_date[self.day + 1], format="%Y-%m-%d")
@@ -126,6 +129,7 @@ class StockEnvTrain(BaseTradeEnv):
                 np.array(self.state[1: (self.stock_dim + 1)])
                 * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
             )
+            self.end_total_asset = end_total_asset
             # TODO: change reward initial balance when flag day comes up with stocks
             self.reward = self._calculate_reward(self.asset_memory[0], begin_total_asset, end_total_asset)
 
