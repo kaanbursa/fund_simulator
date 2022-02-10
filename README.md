@@ -19,13 +19,14 @@ optimize alpha generated and minimize risk.
 - [x] Pretrain from date to date
 - [ ] Pretrain with Expert dataset
 - [ ] Multi input dictionary from env
+    - [ ] Dictionary observation for prices / indicators
 - [x] Time window input 
 - [x] Train process with time window input
-- [ ] Dictionary observation for prices / indicators
 - [ ] Take flag days out of environment
 - [ ] Cirriculum learning
   - [ ] Learn not sell for loss for generalization
-- [ ] Validation of model for different time horizons for PBT
+  - [ ] Learn always to keep 50.000$
+- [x] Validation of model for different time horizons for PBT
 - [ ] Day Trading Environment
 - [ ] MARL
 - [ ] Ensemble voting for trading strategy

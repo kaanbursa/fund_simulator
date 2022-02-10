@@ -2,7 +2,7 @@ import torch
 from agents.Base.BaseAgent import AgentDDPG, AgentPPO#, #AgentSAC, AgentTD3, AgentA2C
 from agents.Base.run import Arguments, train_and_evaluate
 from agents.wrappers.ObservationWrapper import NormalizedEnv
-
+from torch.utils.tensorboard import SummaryWriter
 from utils.pbt import sample_own_ppo_params, sample_sac_params
 import time
 from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
@@ -32,8 +32,9 @@ class TrainerConfig:
     timesteps = 50000
     policy_kwargs = {}
     use_turbulance = False
-    normalize_env = True
+    normalize_env = False
     clip_obs = 1
+    population = 1
     gamma = 0.99
     hparams  = {
         'learning_rate':0.002,
@@ -70,17 +71,24 @@ class DRLAgent:
             make a prediction in a test dataset and get results
     """
 
-    def __init__(self, model_name, model_type, env_train, env_val, env_trade, data, config):
+    def __init__(self, model_name, model_type, env_train, env_val, env_trade, data, config, train_config= TrainerConfig):
         self.env_train = env_train
         self.env_val = env_val
         self.env_trade = env_trade
         self.data = data
-        self.config = TrainerConfig
+        self.end_date = train_config.end_date
+        self.config = train_config
         self.env_config = EnvConfig
         self.unique_trade_date = data[data.Date > self.config.start_trade].Date.unique()
         self.model_name = model_name
-        self.population = 1
+        self.population = train_config.population
         self.agent = MODELS[model_type]()
+        self.dataset_version = train_config.dataset_version
+        self.model_type = model_type
+        if not os.path.exists("./outputs"):
+            os.makedirs("./outputs")
+        with open("outputs/runids.txt", "r") as f:
+            self.runid = int(f.readline())
 
         if model_type not in MODELS:
             raise NotImplementedError("NotImplementedError")
@@ -150,10 +158,10 @@ class DRLAgent:
 
         sampler = {
             'PPO':sample_own_ppo_params(hyperparam_names),
-            'SAC':sample_sac_params(hyperparam_names)
+            #'SAC':sample_sac_params(hyperparam_names)
         }
 
-        new_hparams = sampler[self.model_type]
+        new_hparams = sampler[self.model_type.upper()]
 
         return new_hparams
 
@@ -171,7 +179,8 @@ class DRLAgent:
             "val-start": start,
             "val-end": end,
             "env_hparams": "",
-            'date_training':datetime.now()
+            'date_training':datetime.now(),
+            "runid":self.runid
         }
         if os.path.exists(self.agen_df_path):
             df = pd.read_csv(self.agen_df_path)
@@ -197,6 +206,209 @@ class DRLAgent:
             )
             df = df.append(model_info, ignore_index=True)
             df.to_csv(self.agen_df_path, index=False)
+
+    def summary_write(self, end_total_asset, all_assets_period) -> None:
+        writter = SummaryWriter(comment=self.dataset_version + '-runid-' +str(self.runid))
+
+        writter.add_text('Indicators', ', '.join(indicator_list))
+        stocks = self.data.ticker.unique()
+        writter.add_text('Stocks', ', '.join(stocks))
+        period = self.config.start_date + '-' + self.config.end_date.strftime("%Y/%m/%d")
+        period_trade = self.config.start_trade + '-' + self.config.end_date.strftime("%Y/%m/%d")
+        writter.add_text('Period', 'Training period : ' + period + 'Trading period : ' + period_trade)
+
+        writter.add_text('Trainger Config', ', '.join(
+            [str(k + ':' + str(v) + ' | ') for k, v in self.config.__dict__.items() if '__' not in k]))
+
+        writter.add_hparams(self.config.hparams,
+                            {'hparam/end_total_asset': end_total_asset},
+                            run_name=period_trade)
+        for i,asset in enumerate(all_assets_period):
+            writter.add_scalar('Asset over time', asset, i)
+
+    def _increament_run_id(self) -> None:
+        with open("outputs/runids.txt", "w") as f:
+            self.runid += 1
+            f.write(str(self.runid))
+
+    def run_pbt_prediction(self, model_kwargs, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
+        start = time.time()
+        #TODO: give model kwargs when initializing
+        self.config.hparams = model_kwargs
+        print(f"======Training Agents with the population of {self.population}========")
+        model_name = self.model_name + '-' + str(self.runid)
+        self._increament_run_id()
+        for j in range(self.population):
+            previous_best_end_total_asset = 0
+
+            self.model_name = model_name + '-agent-'  + str(j)
+            self.last_state = []
+            try:
+
+                for i in range(
+                        self.config.rebalance_window + self.config.validation_window + time_frame,
+                        len(self.unique_trade_date),
+                        self.config.rebalance_window,
+                ):
+                    print("============================================")
+                    print('Agent: ', j)
+                    ## initial state is empty
+                    if i - self.config.rebalance_window - self.config.validation_window - time_frame == 0:
+                        # inital state
+                        initial = True
+                    else:
+                        # previous state
+                        initial = False
+
+                    # turbulence_threshold= 1
+                    stocks = self.data[self.data.Date == self.unique_trade_date[i]].ticker.dropna().unique()
+                    stock_dimension = len(stocks)
+
+                    train = data_split(
+                        self.data,
+                        start=self.config.start_date,
+                        end=self.unique_trade_date[
+                            i - self.config.rebalance_window - self.config.validation_window - time_frame
+                            ],
+                    )
+
+                    ## validation env
+                    validation = data_split(
+                        self.data,
+                        start=self.unique_trade_date[
+                            i - self.config.rebalance_window - self.config.validation_window - time_frame
+                            ],
+                        end=self.unique_trade_date[i - self.config.rebalance_window],
+                    )
+
+                    model = self.get_model(self.config.hparams, train, validation, i)
+
+                    ############## Training and Validation starts ##############
+
+                    end_date = self.unique_trade_date[
+                        i - self.config.rebalance_window - self.config.validation_window
+                        ]
+                    print(
+                        "======Model training from: ",
+                        self.config.start_date,
+                        "to ",
+                        end_date,
+                    )
+
+
+                    seed = self.config.hparams['seed']
+                    hparams = self.config.hparams
+                    hparams['seed'] = seed
+                    period = validation['Date'].iloc[0] + ' ' + validation['Date'].iloc[-1]
+
+                    total_reward = 0
+                    model.cwd = './trained_models'
+                    model.break_step = total_timesteps
+                    # Add loss function tracker to train and eval function
+                    reward_avg, reward_max = train_and_evaluate(model)
+                    print(
+                        f"======{self.model_name} Validation from: ",
+                        validation['Date'].iloc[0],
+                        "to ",
+                        validation['Date'].iloc[-1],
+                    )
+                    winner_hparams = self.config.hparams
+
+                    print(
+                        "======Recurrent PPO Validation from: ",
+                        self.unique_trade_date[
+                            i - self.config.rebalance_window - self.config.validation_window - time_frame
+                            ],
+                        "to ",
+                        self.unique_trade_date[i - self.config.rebalance_window],
+                    )
+
+                    print("Total reward at validation for Reccurent PPO", total_reward)
+
+
+
+                    print('=' * 80)
+                    print('Best params, ', winner_hparams)
+                    print('=' * 80)
+                    self.config.hparams = winner_hparams
+
+                    # TODO: load the model
+                    model_ensemble = model.agent
+
+                    ############## Training and Validation ends ##############
+
+                    ############## Trading starts ##############
+
+                    print(
+                        "======Trading from: ",
+                        self.unique_trade_date[i - self.config.rebalance_window],
+                        "to ",
+                        self.unique_trade_date[i],
+                    )
+                    # print("Used Model: ", model_ensemble)
+                    trade_data = data_split(
+                        self.data,
+                        start=self.unique_trade_date[i - self.config.rebalance_window],
+                        end=self.unique_trade_date[i],
+                    )
+                    trade_data.Date = pd.to_datetime(trade_data.Date)
+                    trade_env = self.env_trade(trade_data,
+                                trade_data,
+                                time_window=time_frame,
+                                flag_days=[],
+                                stock_dim=stock_dimension,
+                                unique_trade_date=self.unique_trade_date,
+                                turbulence_threshold=250,
+                                initial=initial,
+                                config=self.env_config,
+                                previous_state=self.last_state,
+                                model_name=self.model_name,
+                                iteration=i,
+                                debug=False)
+                    if self.config.normalize_env:
+                        trade_env = NormalizedEnv(trade_env)
+
+                    net_dimension = model.net_dim
+
+                    all_assets_period, self.last_state = self.DRL_prediction(
+                        model=model_ensemble,
+                        env_trade=trade_env,
+                        cwd='./trained_models',
+                        net_dimension=net_dimension #TODO: find a matching way
+                    )
+                    end_total_asset = all_assets_period[-1]
+                    if end_total_asset > previous_best_end_total_asset:
+                        previous_best_end_total_asset = end_total_asset
+                        winner_hparams = self.config.hparams
+
+
+                    # print("============Trading Done============")
+                    ############## Trading ends ##############
+            except:
+                print('Model destabilized with params: '
+                      , ' Creating new params')
+                hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
+
+                hparams['seed'] = seed
+
+
+            # TO SUMMARY WRITER LIST OF THINGS TO ADD
+            # MODEL VERSIONING (HParams)
+            # DATASET VERSIONING (Name of stocks, Indicators)
+            self.summary_write(end_total_asset, all_assets_period)
+
+            self.config.hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
+            """self._save_model_info(
+                                    winner_hparams,
+                                    previous_best_end_total_asset,
+                                    self.start_trading_date,
+                                    self.end_date
+                )"""
+
+        print('Best hyperparameters are ', winner_hparams)
+        end = time.time()
+
+        print("Population Based Strategy took: ", (end - start) / 60, " minutes")
 
     def run_prediction(self, model_kwargs, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
         start = time.time()
@@ -258,7 +470,7 @@ class DRLAgent:
             hparams = self.config.hparams
             hparams['seed'] = seed
             winner_hparams = dict()
-
+            period = validation['Date'].iloc[0] + ' ' + validation['Date'].iloc[-1]
             for agent in range(self.population):
                 if self.population > 1:  # If Population based training is being used
                     # hparams["learning_rate"] = sched_LR.value
@@ -271,6 +483,7 @@ class DRLAgent:
                         model.break_step = total_timesteps
                         model.target_step = total_timesteps
                         reward_avg, reward_max = train_and_evaluate(model)
+
                         print(
                             f"======{self.model_name} Validation from: ",
                             validation['Date'].iloc[0],
@@ -290,6 +503,7 @@ class DRLAgent:
                         model_kwargs = self.exploit_and_explore(hyperparam_names=model_kwargs) #TODO: Change to model kwargs
                         hparams['seed'] = seed
                         hparams['device'] = 'cuda'
+
                     except:
                         print('Model destabilized with params: '
                               , ' Creating new params')
@@ -385,6 +599,12 @@ class DRLAgent:
                 cwd='./trained_models',
                 net_dimension=net_dimension #TODO: find a matching way
             )
+
+            writter = SummaryWriter(comment=self.dataset_version)
+            writter.add_text('indicators are ')
+
+            writter.add_hparams(winner_hparams,
+                          {'hparam/end_total_asset': end_total_asset, 'hparam/loss': 10 * i}, run_name=period)
             # print("============Trading Done============")
             ############## Trading ends ##############
 
@@ -453,7 +673,7 @@ class DRLAgent:
                 episode_returns.append(episode_return)
                 if done:
 
-                    last_state,_ = env_trade.render()
+                    last_state, _ = env_trade.render()
                     break
         print("Test Finished!")
         # return episode total_assets on testing data

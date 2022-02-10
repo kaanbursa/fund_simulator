@@ -37,16 +37,30 @@ def suggest_uniform(name, low, high):
 
 def sample_own_ppo_params(hparams) -> Dict[str, Any]:
     """
+
     Sampler for PPO hyperparams.
     :param trial:
     :return:
     """
     now = datetime.now()
     np.random.seed(now.second + now.microsecond)
+    model_kwargs = {
+        'learning_rate': 0.0027,
+        'batch_size': 64,
+        'gamma': 0.99,
+        'seed': 42069,
+        'net_dimension': 256,  # Change this dimension to be more dynamic
+        'target_step': 90000,
+        'eval_time_gap': 10
+    }
+    #Change seed?
+    seed = hparams['seed']
     batch_size = suggest_categorical("batch_size", [32, 64, 128, 256, 512])
-    n_steps = suggest_categorical("n_steps", [8, 16, 32, 64, 128, 256, 512, 1024, 2048])
+    eval_time_gap = suggest_categorical("n_steps", [8, 16, 32, 64, 128, 256, 512, 1024, 2048])
     gamma = suggest_categorical("gamma", [0.9, 0.95, 0.98, 0.99, 0.995, 0.999, 0.9999])
-    learning_rate = suggest_uniform("learning_rate", 0.0001, 0.05)
+    learning_rate = round(suggest_uniform("learning_rate", 0.0001, 0.05), 5)
+    target_step = int(suggest_uniform('target_step', 5000, 90000))
+    net_dimension = suggest_categorical('net_dimension', [100, 128, 256, 512, 1026])
     lr_schedule = "constant"
     # Uncomment to enable learning rate schedule
     # lr_schedule = suggest_categorical('lr_schedule', ['linear', 'constant'])
@@ -67,8 +81,8 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
     activation_fn = suggest_categorical("activation_fn", ["tanh", "relu"])
 
     # TODO: account when using multiple envs
-    if batch_size > n_steps:
-        batch_size = n_steps
+    if batch_size > eval_time_gap:
+        batch_size = eval_time_gap
 
     if lr_schedule == "linear":
         learning_rate = linear_schedule(learning_rate)
@@ -76,26 +90,19 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
     # Independent networks usually work best
     # when not working with images
 
-    activation_fn = {"tanh": nn.Tanh, "relu": nn.ReLU, "elu": nn.ELU, "leaky_relu": nn.LeakyReLU}[activation_fn]
+    #activation_fn = {"tanh": nn.Tanh, "relu": nn.ReLU, "elu": nn.ELU, "leaky_relu": nn.LeakyReLU}[activation_fn]
 
-    return {
-        "n_steps": n_steps,
+    new_hparams = {
+        "eval_time_gap": eval_time_gap,
         "batch_size": batch_size,
         "gamma": gamma,
         "learning_rate": learning_rate,
-        "ent_coef": ent_coef,
-        "clip_range": clip_range,
-        "n_epochs": n_epochs,
-        "gae_lambda": gae_lambda,
-        "max_grad_norm": max_grad_norm,
-        "vf_coef": vf_coef,
-        # "sde_sample_freq": sde_sample_freq,
-        "policy_kwargs": dict(
-            # log_std_init=log_std_init,
-            activation_fn=activation_fn,
-            ortho_init=ortho_init,
-        ),
+        "target_step": target_step,
+        "net_dimension":net_dimension,
+        "seed":seed
     }
+    print(new_hparams)
+    return new_hparams
 
 def sample_ppo_params(hparams) -> Dict[str, Any]:
     """

@@ -202,8 +202,7 @@ def train_and_evaluate(args, learner_id=0):
 
             steps, r_exp = update_buffer(traj_list)
 
-        print('Steps ',steps)
-        logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
+        logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau) # (Actor loss, Critic Loss, Action_std_log)
 
         with torch.no_grad():
 

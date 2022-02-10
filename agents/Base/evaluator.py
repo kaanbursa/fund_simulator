@@ -2,6 +2,7 @@ import os
 import time
 import torch
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Evaluator:
@@ -109,6 +110,23 @@ class Evaluator:
             self.recorder = [tuple(i) for i in recorder]  # convert numpy to list
             self.total_step = self.recorder[-1][0]
 
+    def create_tensorboard(self):
+        writer = SummaryWriter(comment='')
+        # 1 how to implement one training process
+        # WHAT to store to tensorboard. Critic Loss, Actor Loss, Reward, End Total asset, through all training and trading
+        total_step, r_avg, r_std, r_exp, *log_tuple = self.recorder
+        for n_iter, (total_step, r_avg, r_std, r_exp, *log_tuple) in enumerate(self.recorder):
+            writer.add_scalar('Loss/train', np.random.random(), n_iter)
+            writer.add_scalar('Loss/test', np.random.random(), n_iter)
+            writer.add_scalar('Accuracy/train', np.random.random(), n_iter)
+            writer.add_scalar('Accuracy/test', np.random.random(), n_iter)
+        with SummaryWriter() as w:
+            for i in range(5):
+                w.add_hparams({'lr': 0.1 * i, 'batch_size': i},
+                              {'hparam/accuracy': 10 * i, 'hparam/loss': 10 * i})
+
+        writer.close()
+
     def draw_plot(self):
         if len(self.recorder) == 0:
             print("| save_npy_draw_plot() WARNNING: len(self.recorder)==0")
@@ -124,7 +142,7 @@ class Evaluator:
         save_learning_curve(self.recorder, self.cwd, save_title)
 
 
-def get_episode_return_and_step(env, act) -> (float, int):  # [ElegantRL.2021.10.13]
+def get_episode_return_and_step(env, act) -> (float, int):
     device_id = next(act.parameters()).get_device()  # net.parameters() is a python generator.
     device = torch.device('cpu' if device_id == -1 else f'cuda:{device_id}')
 
