@@ -107,6 +107,8 @@ class StockEnvTrain(BaseTradeEnv):
                     self._buy_stock(index, actions[index])
 
             self.day += 1
+            if self.day > len(self.df.index.unique()) * 0.5:
+                self.grade = 1
             self.data = self.df.loc[self.day, :].dropna(subset=["ticker"])
             self.past_data = self.df.loc[self.day - self.time_window: self.day, ['adjcp', 'volume']]
             self.index = self.index_df.loc[self.day, :]
