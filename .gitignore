@@ -14,3 +14,4 @@ Training
 *.pyc
 .idea/
 wandb
+AgentResult

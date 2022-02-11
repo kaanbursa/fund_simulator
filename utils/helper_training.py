@@ -49,6 +49,7 @@ def load_all_stocks(start_date, all_stocks_path):
             df = pd.concat([df, stock])
         df.to_csv(all_stocks_path)
         df.Date = pd.to_datetime(df.Date)
+
     return df
 
 def log_trade(info):
@@ -105,3 +106,8 @@ def build_and_log_model(model, model_alias, model_name, config):
         wandb.save(f'{model_alias}.zip')
 
         run.log_artifact(model_artifact)
+
+
+
+def visualize_validation_reward(df):
+    pass

@@ -7,21 +7,23 @@ import numpy as np
 import multiprocessing as mp
 
 from agents.Base.env import build_env, build_eval_env
-from agents.Base.replay import ReplayBuffer, ReplayBufferMP
+from agents.Base.buffer import ReplayBuffer, ReplayBufferMP
 from agents.Base.evaluator import Evaluator
 
 """[ElegantRL.2021.10.21](https://github.com/AI4Finance-Foundation/ElegantRL)"""
 
 
 class Arguments:  # [ElegantRL.2021.10.21]
-    def __init__(self, env, agent):
-        self.env = env  # the environment for training
-        self.env_num = getattr(env, 'env_num', 1)  # env_num = 1. In vector env, env_num > 1.
-        self.max_step = getattr(env, 'max_step', None)  # the max step of an episode
-        self.state_dim = getattr(env, 'state_dim', None)  # vector dimension (feature number) of state
-        self.action_dim = getattr(env, 'action_dim', None)  # vector dimension (feature number) of action
-        self.if_discrete = getattr(env, 'if_discrete', None)  # discrete or continuous action space
-        self.target_return = getattr(env, 'target_return', None)  # target average episode return
+    def __init__(self, env_train, env_val, agent):
+        self.env = env_train  # the environment for training
+
+        # Val env and train env are same they just have difference in visualizaitons
+        self.env_num = getattr(env_train, 'env_num', 1)  # env_num = 1. In vector env, env_num > 1.
+        self.max_step = getattr(env_train, 'max_step', None)  # the max step of an episode
+        self.state_dim = getattr(env_train, 'state_dim', None)  # vector dimension (feature number) of state
+        self.action_dim = getattr(env_train, 'action_dim', None)  # vector dimension (feature number) of action
+        self.if_discrete = getattr(env_train, 'if_discrete', None)  # discrete or continuous action space
+        self.target_return = getattr(env_train, 'target_return', None)  # target average episode return
 
         self.agent = agent  # Deep Reinforcement Learning algorithm
         self.if_off_policy = agent.if_off_policy  # agent is on-policy or off-policy
@@ -59,7 +61,7 @@ class Arguments:  # [ElegantRL.2021.10.21]
         self.break_step = +np.inf  # break training after 'total_step > break_step'
         self.if_allow_break = True  # allow break training when reach goal (early termination)
 
-        self.eval_env = None  # the environment for evaluating. None means set automatically.
+        self.eval_env = env_val  # the environment for evaluating. None means set automatically.
         self.eval_gap = 2 ** 8  # evaluate the agent per eval_gap seconds
         self.eval_times1 = 2 ** 2  # number of times that get episode return in first
         self.eval_times2 = 2 ** 4  # number of times that get episode return in second
@@ -78,7 +80,7 @@ class Arguments:  # [ElegantRL.2021.10.21]
         assert isinstance(self.state_dim, int) or isinstance(self.state_dim, tuple)
         assert isinstance(self.action_dim, int)
         assert isinstance(self.if_discrete, bool)
-        assert isinstance(self.target_return, int) or isinstance(self.target_return, float)
+        #assert isinstance(self.target_return, int) or isinstance(self.target_return, float)
 
         '''agent'''
         assert hasattr(self.agent, 'init')
@@ -114,14 +116,17 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init: Agent'''
     agent = args.agent
+
     agent.init(net_dim=args.net_dim, gpu_id=args.learner_gpus[learner_id],
                state_dim=args.state_dim, action_dim=args.action_dim, env_num=args.env_num,
                learning_rate=args.learning_rate, if_per_or_gae=args.if_per_or_gae)
+
     agent.save_or_load_agent(args.cwd, if_save=False)
 
     env = build_env(env=args.env, if_print=False, device_id=args.eval_gpu_id, env_num=args.env_num)
     if env.env_num == 1:
-        agent.states = [env.reset(), ]
+        agent.states = [np.array(env.reset()), ]
+
         assert isinstance(agent.states[0], np.ndarray)
         assert agent.states[0].shape == (env.state_dim,)
     else:
@@ -139,6 +144,7 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init ReplayBuffer'''
     if args.if_off_policy:
+
         buffer = ReplayBuffer(max_len=args.max_memo, state_dim=env.state_dim,
                               action_dim=1 if env.if_discrete else env.action_dim,
                               if_use_per=args.if_per_or_gae, gpu_id=args.learner_gpus[learner_id])
@@ -155,6 +161,7 @@ def train_and_evaluate(args, learner_id=0):
 
         def update_buffer(_traj_list):
             (ten_state, ten_reward, ten_mask, ten_action, ten_noise) = _traj_list[0]
+
             buffer[:] = (ten_state.squeeze(1),
                          ten_reward,
                          ten_mask,
@@ -178,6 +185,7 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init ReplayBuffer after training start'''
     if agent.if_off_policy:
+
         if_load = buffer.save_or_load_history(cwd, if_save=False)
 
         if not if_load:
@@ -187,24 +195,34 @@ def train_and_evaluate(args, learner_id=0):
 
     '''start training loop'''
     if_train = True
+
     while if_train:
+
         with torch.no_grad():
             traj_list = agent.explore_env(env, target_step, reward_scale, gamma)
+
             steps, r_exp = update_buffer(traj_list)
 
-        logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
-        with torch.no_grad():
-            temp = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
-            if_reach_goal, if_save = temp
-            if_train = not ((if_allow_break and if_reach_goal)
-                            or evaluator.total_step > break_step
-                            or os.path.exists(f'{cwd}/stop'))
+        logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau) # (Actor loss, Critic Loss, Action_std_log)
 
-    print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd}')
+        with torch.no_grad():
+
+            if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
+
+            if_train = if_reach_goal
+
+            """if_train = not ((if_allow_break and if_reach_goal)
+                            or evaluator.total_step > break_step
+                            or os.path.exists(f'{cwd}/stop'))"""
+
+    print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd} | Total Step: {steps}')
 
     agent.save_or_load_agent(cwd, if_save=True)
     buffer.save_or_load_history(cwd, if_save=True) if agent.if_off_policy else None
     evaluator.save_or_load_recoder(if_save=True)
+
+    #TODO: returns tuple for avg reards and max reward
+    return r_avg, r_max
 
 
 def get_step_r_exp(ten_reward):

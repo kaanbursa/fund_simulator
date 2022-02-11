@@ -56,21 +56,27 @@ class StockEnvTrain(BaseTradeEnv):
         self.terminal = self.day >= len(self.df.index.unique()) - 1
 
         if self.terminal:
-            plt.plot(self.asset_memory, "r")
-            plt.savefig("results/account_value_train.png")
-            plt.close()
+
+            self.grade = 1
+            #TODO: give as end information
+            #plt.plot(self.asset_memory, "r")
+            #plt.savefig("results/account_value_train.png")
+            #plt.close()
 
             # print("end_total_asset:{}".format(end_total_asset))
-            df_total_value = pd.DataFrame(self.asset_memory)
-            df_total_value.to_csv("results/account_value_train.csv")
+            #df_total_value = pd.DataFrame(self.asset_memory)
+            #df_total_value.to_csv("results/account_value_train.csv")
 
-            df_total_value.columns = ["account_value"]
-            df_total_value["daily_return"] = df_total_value.pct_change(1)
+            #df_total_value.columns = ["account_value"]
+            #df_total_value["daily_return"] = df_total_value.pct_change(1)
 
             return self.state, self.reward, self.terminal, {}
 
         else:
+            #print(actions[:4])
             actions = actions * self.HMAX_NORMALIZE
+            if np.isnan(actions).any():
+                print(f'actions are nan, in {self.day} and actions are {actions}, state is : {self.state}')
 
             # actions = (actions.astype(int))
 
@@ -83,6 +89,7 @@ class StockEnvTrain(BaseTradeEnv):
             argsort_actions = np.argsort(actions[: self.stock_dim])
 
             sell_index = argsort_actions[: np.where(actions < 0)[0].shape[0]]
+
             buy_index = argsort_actions[::-1][: np.where(actions > 0)[0].shape[0]]
 
             today = pd.to_datetime(self.unique_trade_date[self.day + 1], format="%Y-%m-%d")
@@ -107,22 +114,24 @@ class StockEnvTrain(BaseTradeEnv):
                     self._buy_stock(index, actions[index])
 
             self.day += 1
-            if self.day > len(self.df.index.unique()) * 0.5:
+            if self.day > len(self.df.index.unique()) * 0.5 and self.grade != 1:
+
                 self.grade = 1
             self.data = self.df.loc[self.day, :].dropna(subset=["ticker"])
             self.past_data = self.df.loc[self.day - self.time_window: self.day, ['adjcp', 'volume']]
             self.index = self.index_df.loc[self.day, :]
 
+            # load next state
+
+            self.state = self._get_observation(initial=False)
+
             end_total_asset = self.state[0] + sum(
                 np.array(self.state[1: (self.stock_dim + 1)])
                 * np.array(self.state[(self.stock_dim + 1): (self.stock_dim * 2 + 1)])
             )
-            #TODO: change reward initial balance when flag day comes up with stocks
+            self.end_total_asset = end_total_asset
+            # TODO: change reward initial balance when flag day comes up with stocks
             self.reward = self._calculate_reward(self.asset_memory[0], begin_total_asset, end_total_asset)
-
-            # load next state
-
-            self.state = self._get_observation(initial=False)
 
 
             self.asset_memory.append(end_total_asset)

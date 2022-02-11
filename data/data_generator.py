@@ -20,7 +20,7 @@ def add_indicators_for_stocks( name, ticker_list, index_list, indicators_stock_s
     sn['Date'] = pd.to_datetime(sn['Date'])
     df_non_zero = sn.sort_values(['Date', 'ticker'])
 
-    dataset = df_non_zero[df_non_zero.Date >= start_date]
+    dataset = df_non_zero[(df_non_zero.Date >= start_date) & (df_non_zero.Date < pd.to_datetime(end_date))]
 
     return dataset, index_df
 
@@ -43,6 +43,8 @@ def get_clustered_stocks(df, from_date, to_date, number_of_clusters = 5):
     training_df = training_df[(training_df.Date >= pd.to_datetime(from_date)) & (training_df.Date < pd.to_datetime(to_date))]
     # For clustering
     training_df.Date = training_df.Date.apply(lambda x: x.strftime('%Y-%m-%d'))
+    print(from_date, to_date)
+    print(df.tail())
     UL = UnsupervisedLearning(training_df)
 
     cluster = UL.kmeans_cluster_stocks(number_of_clusters)

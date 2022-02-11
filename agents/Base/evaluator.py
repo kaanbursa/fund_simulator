@@ -2,9 +2,10 @@ import os
 import time
 import torch
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 
-class Evaluator:  # [ElegantRL.2021.10.13]
+class Evaluator:
     def __init__(self, cwd, agent_id, eval_env, eval_gap, eval_times1, eval_times2, target_return, if_overwrite):
         self.recorder = list()  # total_step, r_avg, r_std, obj_c, ...
         self.recorder_path = f'{cwd}/recorder.npy'
@@ -16,7 +17,7 @@ class Evaluator:  # [ElegantRL.2021.10.13]
         self.eval_times1 = eval_times1
         self.eval_times2 = eval_times2
         self.if_overwrite = if_overwrite
-        self.target_return = target_return
+        self.target_return = None
 
         self.r_max = -np.inf
         self.eval_time = 0
@@ -29,39 +30,42 @@ class Evaluator:  # [ElegantRL.2021.10.13]
               f"{'expR':>8}{'objC':>7}{'etc.':>7}")
 
     def evaluate_and_save(self, act, steps, r_exp, log_tuple) -> (bool, bool):  # 2021-09-09
+
         self.total_step += steps  # update total training steps
 
-        if time.time() - self.eval_time < self.eval_gap:
+        """if time.time() - self.eval_time < self.eval_gap:
             if_reach_goal = False
             if_save = False
-        else:
-            self.eval_time = time.time()
+            
+        else:"""
+        self.eval_time = time.time()
 
-            '''evaluate first time'''
-            rewards_steps_list = [get_episode_return_and_step(self.eval_env, act)
-                                  for _ in range(self.eval_times1)]
+        '''evaluate first time'''
+        rewards_steps_list = [get_episode_return_and_step(self.eval_env, act)
+                              for _ in range(self.eval_times1)]
+        r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
+
+        '''evaluate second time'''
+        if r_avg > self.r_max:  # evaluate actor twice to save CPU Usage and keep precision
+            rewards_steps_list += [get_episode_return_and_step(self.eval_env, act)
+                                   for _ in range(self.eval_times2 - self.eval_times1)]
             r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
 
-            '''evaluate second time'''
-            if r_avg > self.r_max:  # evaluate actor twice to save CPU Usage and keep precision
-                rewards_steps_list += [get_episode_return_and_step(self.eval_env, act)
-                                       for _ in range(self.eval_times2 - self.eval_times1)]
-                r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
+        '''save the policy network'''
+        if_save = r_avg > self.r_max
+        if if_save:  # save checkpoint with highest episode return
+            self.r_max = r_avg  # update max reward (episode return)
 
-            '''save the policy network'''
-            if_save = r_avg > self.r_max
-            if if_save:  # save checkpoint with highest episode return
-                self.r_max = r_avg  # update max reward (episode return)
+            act_name = 'actor' if self.if_overwrite else f'actor.{self.r_max:08.2f}'
+            act_path = f"{self.cwd}/{act_name}.pth"
+            torch.save(act.state_dict(), act_path)  # save policy network in *.pth
+            #print(f'saved to {act_path}')
+            #print(f"{self.agent_id:<3}{self.total_step:8.2e}{self.r_max:8.2f} |")  # save policy and print
 
-                act_name = 'actor' if self.if_overwrite else f'actor.{self.r_max:08.2f}'
-                act_path = f"{self.cwd}/{act_name}.pth"
-                torch.save(act.state_dict(), act_path)  # save policy network in *.pth
+        self.recorder.append((self.total_step, r_avg, r_std, r_exp, *log_tuple))  # update recorder
 
-                print(f"{self.agent_id:<3}{self.total_step:8.2e}{self.r_max:8.2f} |")  # save policy and print
-
-            self.recorder.append((self.total_step, r_avg, r_std, r_exp, *log_tuple))  # update recorder
-
-            '''print some information to Terminal'''
+        '''print some information to Terminal'''
+        if self.target_return is not None:
             if_reach_goal = bool(self.r_max > self.target_return)  # check if_reach_goal
             if if_reach_goal and self.used_time is None:
                 self.used_time = int(time.time() - self.start_time)
@@ -76,7 +80,20 @@ class Evaluator:  # [ElegantRL.2021.10.13]
                   f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
                   f"{r_exp:8.2f}{''.join(f'{n:7.2f}' for n in log_tuple)}")
             self.draw_plot()
-        return if_reach_goal, if_save
+            #print(if_reach_goal, if_save, r_avg, self.r_max)
+            return if_reach_goal, if_save, r_avg, self.r_max
+        #TODO: Change this to mormal
+
+        else:
+            print(f"{self.agent_id:<3}{self.total_step:8.2e}{self.r_max:8.2f} |"
+                  f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
+                  f"{r_exp:8.2f}{''.join(f'{n:7.2f}' for n in log_tuple)}")
+
+            # TODO: Stop training after some epochs
+            if_stop_train = False
+            self.draw_plot()
+            return if_stop_train, if_save, r_avg, s_avg
+
 
     @staticmethod
     def get_r_avg_std_s_avg_std(rewards_steps_list):
@@ -93,6 +110,23 @@ class Evaluator:  # [ElegantRL.2021.10.13]
             self.recorder = [tuple(i) for i in recorder]  # convert numpy to list
             self.total_step = self.recorder[-1][0]
 
+    def create_tensorboard(self):
+        writer = SummaryWriter(comment='')
+        # 1 how to implement one training process
+        # WHAT to store to tensorboard. Critic Loss, Actor Loss, Reward, End Total asset, through all training and trading
+        total_step, r_avg, r_std, r_exp, *log_tuple = self.recorder
+        for n_iter, (total_step, r_avg, r_std, r_exp, *log_tuple) in enumerate(self.recorder):
+            writer.add_scalar('Loss/train', np.random.random(), n_iter)
+            writer.add_scalar('Loss/test', np.random.random(), n_iter)
+            writer.add_scalar('Accuracy/train', np.random.random(), n_iter)
+            writer.add_scalar('Accuracy/test', np.random.random(), n_iter)
+        with SummaryWriter() as w:
+            for i in range(5):
+                w.add_hparams({'lr': 0.1 * i, 'batch_size': i},
+                              {'hparam/accuracy': 10 * i, 'hparam/loss': 10 * i})
+
+        writer.close()
+
     def draw_plot(self):
         if len(self.recorder) == 0:
             print("| save_npy_draw_plot() WARNNING: len(self.recorder)==0")
@@ -108,7 +142,7 @@ class Evaluator:  # [ElegantRL.2021.10.13]
         save_learning_curve(self.recorder, self.cwd, save_title)
 
 
-def get_episode_return_and_step(env, act) -> (float, int):  # [ElegantRL.2021.10.13]
+def get_episode_return_and_step(env, act) -> (float, int):
     device_id = next(act.parameters()).get_device()  # net.parameters() is a python generator.
     device = torch.device('cpu' if device_id == -1 else f'cuda:{device_id}')
 

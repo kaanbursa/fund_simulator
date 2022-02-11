@@ -7,6 +7,8 @@ from stockstats import StockDataFrame as Sdf
 from config.config import ALL_STOCKS_DATA_FILE
 from datetime import date, timedelta, datetime
 import ccxt
+import csv
+from pathlib import Path
 import enum
 
 class DataProcessor():
@@ -250,6 +252,89 @@ class DataProcessor():
             sn_n.to_csv("./datasets/" + name + ".csv", index=False)
 
         return sn_n, index_df
+
+    def _retry_fetch_ohlcv(self, exchange, max_retries, symbol, timeframe, since, limit):
+        num_retries = 0
+        try:
+            num_retries += 1
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since, limit)
+            # print('Fetched', len(ohlcv), symbol, 'candles from', exchange.iso8601 (ohlcv[0][0]), 'to', exchange.iso8601 (ohlcv[-1][0]))
+            return ohlcv
+        except Exception:
+            if num_retries > max_retries:
+                raise  # Exception('Failed to fetch', timeframe, symbol, 'OHLCV in', max_retries, 'attempts')
+
+    def _scrape_ohlcv(self, exchange, max_retries, symbol, timeframe, since, limit):
+        earliest_timestamp = exchange.milliseconds()
+        timeframe_duration_in_seconds = exchange.parse_timeframe(timeframe)
+        timeframe_duration_in_ms = timeframe_duration_in_seconds * 1000
+        timedelta = limit * timeframe_duration_in_ms
+        all_ohlcv = []
+        while True:
+            fetch_since = earliest_timestamp - timedelta
+            ohlcv = self._retry_fetch_ohlcv(
+                exchange, max_retries, symbol, timeframe, fetch_since, limit
+            )
+            # if we have reached the beginning of history
+            if ohlcv[0][0] >= earliest_timestamp:
+                break
+            earliest_timestamp = ohlcv[0][0]
+            all_ohlcv = ohlcv + all_ohlcv
+            print(
+                len(all_ohlcv),
+                symbol,
+                "candles in total from",
+                exchange.iso8601(all_ohlcv[0][0]),
+                "to",
+                exchange.iso8601(all_ohlcv[-1][0]),
+            )
+            # if we have reached the checkpoint
+            if fetch_since < since:
+                break
+        return all_ohlcv
+
+    def _write_to_csv(self, filename, exchange, data):
+        p = Path("./data/raw/", str(exchange))
+        p.mkdir(parents=True, exist_ok=True)
+        full_path = p / str(filename)
+        with Path(full_path).open("w+", newline="") as output_file:
+            csv_writer = csv.writer(
+                output_file, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
+            )
+            csv_writer.writerows(data)
+        df = pd.read_csv(full_path, names=['Date','open','high','low','close','volume'])
+        df.Date = df.Date.apply(lambda x: datetime.fromtimestamp(x / 1000))
+        df.to_csv(full_path)
+        return df
+
+    def get_crypto_price(self, filename, exchange_id, max_retries, symbol, timeframe, since, limit):
+        # instantiate the exchange by id
+        exchange = getattr(ccxt, exchange_id)(
+            {
+                "enableRateLimit": True,  # required by the Manual
+            }
+        )
+        # convert since from string to milliseconds integer if needed
+        if isinstance(since, str):
+            since = exchange.parse8601(since)
+        # preload all markets from the exchange
+        exchange.load_markets()
+        # fetch all candles
+        ohlcv = self._scrape_ohlcv(exchange, max_retries, symbol, timeframe, since, limit)
+        # save them to csv file
+        df = self._write_to_csv(filename, exchange, ohlcv)
+        print(
+            "Saved",
+            len(ohlcv),
+            "candles from",
+            exchange.iso8601(ohlcv[0][0]),
+            "to",
+            exchange.iso8601(ohlcv[-1][0]),
+            "to",
+            filename,
+        )
+        return df
+
 
 
 def data_split(df, start, end):

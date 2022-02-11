@@ -19,20 +19,25 @@ optimize alpha generated and minimize risk.
 - [x] Pretrain from date to date
 - [ ] Pretrain with Expert dataset
 - [ ] Multi input dictionary from env
+    - [ ] Dictionary observation for prices / indicators
 - [x] Time window input 
-- [ ] Train process with time window input
-- [ ] Dictionary observation for prices / indicators
+- [x] Train process with time window input
 - [ ] Take flag days out of environment
 - [ ] Cirriculum learning
-  - [ ] Learn not sell for loss
+  - [ ] Learn not sell for loss for generalization
+  - [ ] Learn always to keep 50.000$
+- [x] Validation of model for different time horizons for PBT
+- [ ] Day Trading Environment
+- [ ] MARL
+- [ ] Ensemble voting for trading strategy
 - Data Selection Add to Preprocess
   - [ ] Correlation Table as input
-  - [ ] Past prices for the input
-  - [ ] Bought price of stocks in environment as a fuction
+  - [x] Past prices for the input
+  - [ ] Avg. bought price of stocks in environment as a fuction
   - [x] Dynamic Clustering 
   - [x] Normalized inputs for the model
   - [ ] Switching stocks and keeping the same stock holding if is in same list
   
 ### To start
-1. pip install requirements.txt
+1. pip install -r requirements.txt
 2. StockTradingBot.ipynb notebook is for training process
