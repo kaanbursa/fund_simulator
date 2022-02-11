@@ -7,7 +7,7 @@ import numpy as np
 import multiprocessing as mp
 
 from agents.Base.env import build_env, build_eval_env
-from agents.Base.replay import ReplayBuffer, ReplayBufferMP
+from agents.Base.buffer import ReplayBuffer, ReplayBufferMP
 from agents.Base.evaluator import Evaluator
 
 """[ElegantRL.2021.10.21](https://github.com/AI4Finance-Foundation/ElegantRL)"""
@@ -120,12 +120,13 @@ def train_and_evaluate(args, learner_id=0):
     agent.init(net_dim=args.net_dim, gpu_id=args.learner_gpus[learner_id],
                state_dim=args.state_dim, action_dim=args.action_dim, env_num=args.env_num,
                learning_rate=args.learning_rate, if_per_or_gae=args.if_per_or_gae)
+
     agent.save_or_load_agent(args.cwd, if_save=False)
 
     env = build_env(env=args.env, if_print=False, device_id=args.eval_gpu_id, env_num=args.env_num)
     if env.env_num == 1:
         agent.states = [np.array(env.reset()), ]
-        #print(agent.states)
+
         assert isinstance(agent.states[0], np.ndarray)
         assert agent.states[0].shape == (env.state_dim,)
     else:

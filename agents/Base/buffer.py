@@ -337,3 +337,36 @@ class BinarySearchTree:
         prob = td_error.squeeze().clamp(1e-6, 10).pow(self.per_alpha)
         prob = prob.cpu().numpy()
         self.update_ids(self.indices, prob)
+
+
+class RolloutReccurentBufffer:
+    def __init__(self, config: dict, state_dim: int, action_dim: int, device: torch.device) -> None:
+        """
+        Args:
+            config {dict} -- Configuration and hyperparameters of the environment, trainer and model.
+            observation_space {spaces.Box} -- The observation space of the agent
+            device {torch.device} -- The device that will be used for training
+        """
+
+        # Setup members
+        self.device = device
+        self.n_workers = config["n_workers"]
+        self.worker_steps = config["worker_steps"]
+        self.n_mini_batches = config["n_mini_batch"]
+        self.batch_size = self.n_workers * self.worker_steps
+        self.mini_batch_size = self.batch_size // self.n_mini_batches
+        hidden_state_size = config["recurrence"]["hidden_state_size"]
+        self.layer_type = config["recurrence"]["layer_type"]
+        self.sequence_length = config["recurrence"]["sequence_length"]
+        self.true_sequence_length = 0
+
+        # Initialize buffers data storage
+        self.rewards = np.zeros((self.n_workers, self.worker_steps), dtype = np.float32)
+        self.actions = np.zeros((self.n_workers, self.worker_steps), dtype=torch.LongTensor)
+        self.dones = np.zeros((self.n_workers, self.worker_steps), dtype=np.bool)
+        self.obs = np.zeros((self.n_workers, self.worker_steps) + state_dim)
+        self.hxs = np.zeros((self.n_workers, self.worker_steps, hidden_state_size))
+        self.cxs = np.zeros((self.n_workers, self.worker_steps, hidden_state_size))
+        self.log_probs = torch.zeros((self.n_workers, self.worker_steps)) # actor out
+        self.values = torch.zeros((self.n_workers, self.worker_steps)) # critic out
+        self.advantages = torch.zeros((self.n_workers, self.worker_steps)) # calculated adv

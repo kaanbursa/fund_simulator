@@ -226,8 +226,21 @@ class AgentBase:
             ten_other[:, 1] = (1.0 - ten_other[:, 1]) * gamma  # ten_mask = (1.0 - ary_done) * gamma
         return traj_list
 
-    def summary(self):
-        raise NotImplementedError
+    def _write_summary(self, update, training_stats, episode_result) -> None:
+        """Writes to an event file based on the run-id argument.
+                Args:
+                    update {int} -- Current PPO Update
+                    training_stats {list} -- Statistics of the training algorithm
+                    episode_result {dict} -- Statistics of completed episodes
+        """
+
+        for key, value in training_stats:
+
+            self.writer.add_scalar(f"losses/{key}", value, update)
+
+        #self.writer.add_scalar("training/sequence_length", self.buffer.true_sequence_length, update)
+        #self.writer.add_scalar("training/value_mean", torch.mean(self.buffer.values), update)
+        #self.writer.add_scalar("training/advantage_mean", torch.mean(self.buffer.advantages), update)
 
 
 class AgentDQN(AgentBase):
@@ -699,7 +712,12 @@ class AgentPPO(AgentBase):
         
         assert buf_len >= batch_size, 'buf len bigger than batch size'
         update_times = int(buf_len / batch_size * repeat_times)
-
+        training_stats = {
+            "loss":0,
+            "policy_loss":0,
+            "value_loss":0,
+            "entropy":0
+        }
         for update_i in range(1, update_times + 1):
 
             indices = torch.randint(buf_len, size=(batch_size,), requires_grad=False, device=self.device)
@@ -726,6 +744,12 @@ class AgentPPO(AgentBase):
             self.optim_update(self.cri_optim, obj_critic, self.cri.parameters())
             self.soft_update(self.cri_target, self.cri, soft_update_tau) if self.cri_target is not self.cri else None
 
+            training_stats["loss"] = obj_critic.item() + obj_actor.item()
+            training_stats["policy_loss"] = obj_actor.item()
+            training_stats["value_loss"] = obj_critic.item()
+            training_stats["entropy"] = 0
+
+            self._write_summary(update_i, training_stats, 0)
         a_std_log = getattr(self.act, 'a_std_log', torch.zeros(1)).mean()
         return obj_critic.item(), obj_actor.item(), a_std_log.item()  # logging_tuple
 

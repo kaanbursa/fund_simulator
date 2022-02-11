@@ -9,7 +9,6 @@ from gym.utils import seeding
 from utils.indicators import indicator_list
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-# TODO: Tensorboard integration
 
 
 class EnvConfig:
