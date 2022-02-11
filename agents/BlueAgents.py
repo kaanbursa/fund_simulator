@@ -71,7 +71,8 @@ class DRLAgent:
             make a prediction in a test dataset and get results
     """
 
-    def __init__(self, model_name, model_type, env_train, env_val, env_trade, data, config, train_config= TrainerConfig):
+    def __init__(self, model_name, model_type,
+                 env_train, env_val, env_trade, data, config, model_kwargs, train_config= TrainerConfig):
         self.env_train = env_train
         self.env_val = env_val
         self.env_trade = env_trade
@@ -84,6 +85,7 @@ class DRLAgent:
         self.population = train_config.population
         self.agent = MODELS[model_type]()
         self.dataset_version = train_config.dataset_version
+        self.config.hparams = model_kwargs
         self.model_type = model_type
         if not os.path.exists("./outputs"):
             os.makedirs("./outputs")
@@ -219,10 +221,11 @@ class DRLAgent:
 
         writter.add_text('Trainger Config', ', '.join(
             [str(k + ':' + str(v) + ' | ') for k, v in self.config.__dict__.items() if '__' not in k]))
-
+        print('Writing hparams: ', self.config.hparams)
         writter.add_hparams(self.config.hparams,
                             {'hparam/end_total_asset': end_total_asset},
                             run_name=period_trade)
+
         for i,asset in enumerate(all_assets_period):
             writter.add_scalar('Asset over time', asset, i)
 
@@ -231,10 +234,8 @@ class DRLAgent:
             self.runid += 1
             f.write(str(self.runid))
 
-    def run_pbt_prediction(self, model_kwargs, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
+    def run_pbt_prediction(self, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
         start = time.time()
-        #TODO: give model kwargs when initializing
-        self.config.hparams = model_kwargs
         print(f"======Training Agents with the population of {self.population}========")
         model_name = self.model_name + '-' + str(self.runid)
         self._increament_run_id()
@@ -332,7 +333,7 @@ class DRLAgent:
                     print('=' * 80)
                     self.config.hparams = winner_hparams
 
-                    # TODO: load the model
+
                     model_ensemble = model.agent
 
                     ############## Training and Validation ends ##############
@@ -374,7 +375,7 @@ class DRLAgent:
                         model=model_ensemble,
                         env_trade=trade_env,
                         cwd='./trained_models',
-                        net_dimension=net_dimension #TODO: find a matching way
+                        net_dimension=net_dimension
                     )
                     end_total_asset = all_assets_period[-1]
                     if end_total_asset > previous_best_end_total_asset:
@@ -410,9 +411,10 @@ class DRLAgent:
 
         print("Population Based Strategy took: ", (end - start) / 60, " minutes")
 
-    def run_prediction(self, model_kwargs, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
+    def run_prediction(self, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
         start = time.time()
         self.last_state = []
+        self._increament_run_id()
         for i in range(
                 self.config.rebalance_window + self.config.validation_window + time_frame,
                 len(self.unique_trade_date),
@@ -450,7 +452,7 @@ class DRLAgent:
 
 
 
-            model = self.get_model(model_kwargs, train, validation, i)
+            model = self.get_model(self.config.hparams, train, validation, i)
 
             ############## Training and Validation starts ##############
 
@@ -465,79 +467,40 @@ class DRLAgent:
             )
 
             print(f"======Training Agents with the population of {self.population}========")
-            reward = -100
+
             seed = self.config.hparams['seed']
             hparams = self.config.hparams
             hparams['seed'] = seed
-            winner_hparams = dict()
+
             period = validation['Date'].iloc[0] + ' ' + validation['Date'].iloc[-1]
-            for agent in range(self.population):
-                if self.population > 1:  # If Population based training is being used
-                    # hparams["learning_rate"] = sched_LR.value
-                    try:
 
-                        # TODO: Try different seasons for validations pick the top reward
-                        total_reward = 0
-                        model = self.get_model(model_kwargs, train, validation, i)
-                        model.cwd = f'./trained_models/{self.model_name}-citizen{agent}'
-                        model.break_step = total_timesteps
-                        model.target_step = total_timesteps
-                        reward_avg, reward_max = train_and_evaluate(model)
+            # model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
+            # study = optuna.create_study()
+            # study.optimize(self.optimize_train, n_trials=100)
+            total_reward = 0
+            model.cwd = './trained_models'
+            model.break_step = total_timesteps
+            reward_avg, reward_max = train_and_evaluate(model)
+            print(
+                f"======{self.model_name} Validation from: ",
+                validation['Date'].iloc[0],
+                "to ",
+                validation['Date'].iloc[-1],
+            )
+            hparams = self.config.hparams
 
-                        print(
-                            f"======{self.model_name} Validation from: ",
-                            validation['Date'].iloc[0],
-                            "to ",
-                            validation['Date'].iloc[-1],
-                        )
+            winner_hparams = hparams
 
+            print(
+                "======Recurrent PPO Validation from: ",
+                self.unique_trade_date[
+                    i - self.config.rebalance_window - self.config.validation_window - time_frame
+                    ],
+                "to ",
+                self.unique_trade_date[i - self.config.rebalance_window],
+            )
 
-
-                        if reward_avg > reward:
-                            print(
-                                f"Agent #{agent} has better performance for the training period with total reward: {total_reward}")
-                            reward = total_reward
-                            winner = model
-                            winner_hparams = hparams
-                        # ====================================
-                        model_kwargs = self.exploit_and_explore(hyperparam_names=model_kwargs) #TODO: Change to model kwargs
-                        hparams['seed'] = seed
-                        hparams['device'] = 'cuda'
-
-                    except:
-                        print('Model destabilized with params: '
-                              , ' Creating new params')
-                        hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
-
-                        hparams['seed'] = seed
-                else:  # Use optuna for hyperparameter tuning
-                    # model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
-                    # study = optuna.create_study()
-                    # study.optimize(self.optimize_train, n_trials=100)
-                    total_reward = 0
-                    model.cwd = './trained_models'
-                    model.break_step = total_timesteps
-                    reward_avg, reward_max = train_and_evaluate(model)
-                    print(
-                        f"======{self.model_name} Validation from: ",
-                        validation['Date'].iloc[0],
-                        "to ",
-                        validation['Date'].iloc[-1],
-                    )
-                    hparams = self.config.hparams
-
-                    winner_hparams = hparams
-
-                    print(
-                        "======Recurrent PPO Validation from: ",
-                        self.unique_trade_date[
-                            i - self.config.rebalance_window - self.config.validation_window - time_frame
-                            ],
-                        "to ",
-                        self.unique_trade_date[i - self.config.rebalance_window],
-                    )
-
-                    print("Total reward at validation for Reccurent PPO", total_reward)
+            print("Total reward at validation for PPO", total_reward)
 
             """self._save_model_info(
                 winner_hparams,
@@ -555,7 +518,7 @@ class DRLAgent:
 
             # Model Selection based on sharpe ratio
             # if (sharpe_ppo >= sharpe_a2c):
-            # TODO: load the model
+
             model_ensemble = model.agent
 
             ############## Training and Validation ends ##############
@@ -593,18 +556,16 @@ class DRLAgent:
 
             net_dimension = model.net_dim
 
-            end_total_asset, self.last_state = self.DRL_prediction(
+            episode_assets, self.last_state = self.DRL_prediction(
                 model=model_ensemble,
                 env_trade=trade_env,
                 cwd='./trained_models',
-                net_dimension=net_dimension #TODO: find a matching way
+                net_dimension=net_dimension
             )
 
-            writter = SummaryWriter(comment=self.dataset_version)
-            writter.add_text('indicators are ')
+            self.summary_write(episode_assets[-1], all_assets_period=episode_assets)
 
-            writter.add_hparams(winner_hparams,
-                          {'hparam/end_total_asset': end_total_asset, 'hparam/loss': 10 * i}, run_name=period)
+
             # print("============Trading Done============")
             ############## Trading ends ##############
 
@@ -682,82 +643,5 @@ class DRLAgent:
         return episode_total_assets, last_state
 
 
-class Trainer:
-    """
-    Class for training the agent build by the team
-    """
-    def __init__(
-        self,
-        model,
-        policy,
-        env_train,
-        env_val,
-        env_trade,
-        config,
-        model_name,
-        dataset_version,
-        population = 5,
-        env_config=EnvConfig,
-        debug = False,
-        tensorboard=False,
-    ):
-        self.model_type = model
-        self.policy = policy
-        self.model = model
-        self.dataset_version = dataset_version
-        self.env_train = env_train
-        self.env_val = env_val
-        self.env_trade = env_trade
-        self.config = config
-        self.model_name = model_name
-        self.total_reward = 0
-        self.env_config = env_config
-        self.population = population
-        self.policy_kwargs = config.policy_kwargs
-        self.agen_df_path = "./agents_hparams.csv"
-        self.stocks_file_path = config.stocks_file_path
-        self.indicators_stock_stats = indicators_stock_stats
-        self.index_list = config.index_list
-        self.timesteps = config.timesteps if not debug else 10
-        self.stocks = load_all_stocks(config.start_date, config.all_stocks_path)
-        print('Total number of stocks:  ', len(self.stocks.ticker.unique()))
-        #self.tbcallback = TensorboardCallback()
-        self.debug = debug
-        self.tensorboard=tensorboard
-        self.tensoriter = 0
-        #wandb.init(project='rl-dqn', entity='kaanb', config=hparams)
-        if torch.cuda.is_available():
-            print('GPU available')
-    def get_model(self):
-        model = Arguments(env, agent)
-        if model_name in OFF_POLICY_MODELS:
-            model.if_off_policy = True
-        else:
-            model.if_off_policy = False
 
-        if model_kwargs is not None:
-            try:
-                model.learning_rate = model_kwargs["learning_rate"]
-                model.batch_size = model_kwargs["batch_size"]
-                model.gamma = model_kwargs["gamma"]
-                model.seed = model_kwargs["seed"]
-                model.net_dim = model_kwargs["net_dimension"]
-                model.target_step = model_kwargs["target_step"]
-                model.eval_gap = model_kwargs["eval_time_gap"]
-            except BaseException:
-                raise ValueError(
-                    "Fail to read arguments, please check 'model_kwargs' input."
-                )
-        return model
-
-    def train_model(self, env_train, hparams, timesteps=50000, load=False, model_to_load=''):
-        start = time.time()
-        model_path = f"{self.config.TRAINED_MODEL_DIR}/{self.model_name}"
-
-        end = time.time()
-        model.save(model_path)
-        print(
-            "Training time ", self.model_name, ": ", (end - start) / 60, " minutes"
-        )
-        return model
 
