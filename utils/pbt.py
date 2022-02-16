@@ -44,17 +44,9 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
     """
     now = datetime.now()
     np.random.seed(now.second + now.microsecond)
-    model_kwargs = {
-        'learning_rate': 0.0027,
-        'batch_size': 64,
-        'gamma': 0.99,
-        'seed': 42069,
-        'net_dimension': 256,  # Change this dimension to be more dynamic
-        'target_step': 90000,
-        'eval_time_gap': 10
-    }
+
     #Change seed?
-    seed = hparams['seed']
+    seed = int(suggest_uniform('seed', 1,10000))
     batch_size = suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     eval_time_gap = suggest_categorical("n_steps", [8, 16, 32, 64, 128, 256, 512, 1024, 2048])
     gamma = suggest_categorical("gamma", [0.9, 0.95, 0.98, 0.99, 0.995, 0.999, 0.9999])
@@ -101,7 +93,7 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
         "net_dimension":net_dimension,
         "seed":seed
     }
-    print(new_hparams)
+
     return new_hparams
 
 def sample_ppo_params(hparams) -> Dict[str, Any]:

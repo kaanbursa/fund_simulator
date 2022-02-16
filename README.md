@@ -1,6 +1,6 @@
-#Portfolio Manager AI
+# Portfolio Manager AI
 
-###Introduction
+### Introduction
 Simulation Environment for stock market and agent which takes the input as Markov decision process. The input is
 mathematical indicators deriven from price and volume of stock which passes through a neural network that tries to 
 optimize alpha generated and minimize risk. 

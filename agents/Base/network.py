@@ -412,6 +412,80 @@ class ActorDiscretePPO(nn.Module):
         return dist.log_prob(a_int)
 
 
+class ActorRecurrentPPO(nn.Module):
+    """
+    Actor class for **PPO** with stochastic, learnable, **state-independent** log standard deviation.
+
+    :param mid_dim[int]: the middle dimension of networks
+    :param state_dim[int]: the dimension of state (the number of state vector)
+    :param action_dim[int]: the dimension of action (the number of discrete action)
+    """
+
+    def __init__(self, mid_dim, state_dim, action_dim):
+        super().__init__()
+        if isinstance(state_dim, int):
+            nn_middle = nn.Sequential(nn.Linear(state_dim, mid_dim), nn.ReLU(),
+                                      nn.Linear(mid_dim, mid_dim), nn.ReLU(), )
+        else:
+            nn_middle = Conv2dNet(inp_dim=state_dim[2], out_dim=mid_dim, image_size=state_dim[0])
+
+        self.net = nn.Sequential(nn_middle,
+                                 nn.Linear(mid_dim, mid_dim), nn.Hardswish(),
+                                 nn.Linear(mid_dim, action_dim), )
+        layer_norm(self.net[-1], std=0.1)  # output layer for action
+
+        # the logarithm (log) of standard deviation (std) of action, it is a trainable parameter
+        self.a_std_log = nn.Parameter(torch.zeros((1, action_dim)) - 0.5, requires_grad=True)
+        self.sqrt_2pi_log = np.log(np.sqrt(2 * np.pi))
+
+    def forward(self, state):
+        """
+        The forward function.
+        :param state[np.array]: the input state.
+        :return: the output tensor.
+        """
+        return self.net(state).tanh()  # action.tanh()
+
+    def get_action(self, state):
+        """
+        The forward function with Gaussian noise.
+        :param state[np.array]: the input state.
+        :return: the action and added noise.
+        """
+        a_avg = self.net(state)
+        a_std = self.a_std_log.exp()
+
+        noise = torch.randn_like(a_avg)
+        action = a_avg + noise * a_std
+        return action, noise
+
+    def get_logprob_entropy(self, state, action):
+        """
+        Compute the log of probability with current network.
+        :param state[np.array]: the input state.
+        :param action[float]: the action.
+        :return: the log of probability and entropy.
+        """
+        a_avg = self.net(state)
+        a_std = self.a_std_log.exp()
+
+        delta = ((a_avg - action) / a_std).pow(2) * 0.5
+        logprob = -(self.a_std_log + self.sqrt_2pi_log + delta).sum(1)  # new_logprob
+
+        dist_entropy = (logprob.exp() * logprob).mean()  # policy entropy
+        return logprob, dist_entropy
+
+    def get_old_logprob(self, _action, noise):  # noise = action - a_noise
+        """
+        Compute the log of probability with old network.
+        :param _action[float]: the action.
+        :param noise[float]: the added noise when exploring.
+        :return: the log of probability with old network.
+        """
+        delta = noise.pow(2) * 0.5
+        return -(self.a_std_log + self.sqrt_2pi_log + delta).sum(1)  # old_logprob
+
+
 '''Value Network (Critic)'''
 
 
@@ -491,6 +565,37 @@ class CriticTwin(nn.Module):  # shared parameter
 
 
 class CriticPPO(nn.Module):
+    """
+    The Critic class for **PPO**.
+
+    :param mid_dim[int]: the middle dimension of networks
+    :param state_dim[int]: the dimension of state (the number of state vector)
+    :param action_dim[int]: the dimension of action (the number of discrete action)
+    """
+
+    def __init__(self, mid_dim, state_dim, _action_dim):
+        super().__init__()
+        if isinstance(state_dim, int):
+            nn_middle = nn.Sequential(nn.Linear(state_dim, mid_dim), nn.ReLU(), )
+        else:
+            nn_middle = Conv2dNet(inp_dim=state_dim[2], out_dim=mid_dim, image_size=state_dim[0])
+
+        self.net = nn.Sequential(nn_middle,
+                                 nn.Linear(mid_dim, mid_dim), nn.ReLU(),
+                                 nn.Linear(mid_dim, mid_dim), nn.Hardswish(),
+                                 nn.Linear(mid_dim, 1), )
+        layer_norm(self.net[-1], std=0.5)  # output layer for advantage value
+
+    def forward(self, state):
+        """
+        The forward function to ouput the value of the state.
+        :param state[np.array]: the input state.
+        :return: the output tensor.
+        """
+        return self.net(state)  # advantage value
+
+
+class CriticRecurrentPPO(nn.Module):
     """
     The Critic class for **PPO**.
 
@@ -766,6 +871,82 @@ class SharePPO(nn.Module):  # Pixel-level state version
         a_std = self.a_std_log.exp()
         logprob = -(((a_avg - action) / a_std).pow(2) / 2 + self.a_std_log + self.sqrt_2pi_log).sum(1)
         return q1, q2, logprob
+
+class ShareRecurrentPPO(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim, fc_mid_dim):
+        super().__init__()
+        if isinstance(state_dim, int):
+            # Shared rec layer
+            self.recurrent_layer = nn.LSTM(state_dim, hidden_dim, batch_first=True)
+            for name, param in self.recurrent_layer.named_parameters():
+                if "bias" in name:
+                    nn.init.constant(param, 0)
+                elif "weight" in name:
+                    nn.init.orthogonal_(param, np.sqrt(2))
+        else:
+            self.enc_s = Conv2dNet(inp_dim=state_dim[2], out_dim=hidden_dim, image_size=state_dim[0])
+
+        self.vf = CriticPPO(fc_mid_dim, hidden_dim, 1)
+        self.act = ActorPPO(fc_mid_dim, hidden_dim, action_dim)
+        #layer_norm(self.dec_a[-1], std=0.01)
+
+        #self.sqrt_2pi_log = np.log(np.sqrt(2 * np.pi))
+
+    def forward(self, s, rec_cell, seq_len):
+
+        if seq_len == 1:
+            s, rec_cell = self.recurrent_layer(s.unsqueeze(1), rec_cell)
+            s = s.squeeze(1)
+        else:
+            s_shape = tuple(s.size())
+            s = s.reshape((s_shape[0] // seq_len), seq_len, s_shape[1])
+
+            s, rec_cell = self.recurrent_layer(s.unsqueeze(1), rec_cell)
+
+            s_shape = tuple(s.size())
+            s = s.reshape(s_shape[0] * s_shape[1], s_shape[2])
+        action = self.act(s)
+        value = self.vf(s)
+        a_noise, noise = self.get_action_noise(s)
+
+        return action, value, rec_cell, a_noise
+
+    def init_recurent_cell_states(self, num_sequences:int, device:torch.device) -> tuple:
+        """Inıtializes the recurrent cell states"""
+
+        hxs = torch.zeros((num_sequences), self.recurrent_layer, dtype=torch.float32, device=device)
+        cxs = None # None since cell state will be used later add todo
+
+        return hxs
+
+    def get_action_noise(self, state):
+        s_ = self.enc_s(state)
+        a_avg = self.dec_a(s_)
+        a_std = self.a_std_log.exp()
+
+        # a_noise = torch.normal(a_avg, a_std) # same as below
+        noise = torch.randn_like(a_avg)
+        a_noise = a_avg + noise * a_std
+        return a_noise, noise
+
+    def get_q_logprob(self, state, noise):
+        s_ = self.enc_s(state)
+
+        q = torch.min(self.dec_q1(s_), self.dec_q2(s_))
+        logprob = -(noise.pow(2) / 2 + self.a_std_log + self.sqrt_2pi_log).sum(1)
+        return q, logprob
+
+    def get_q1_q2_logprob(self, state, action):
+        s_ = self.enc_s(state)
+
+        q1 = self.dec_q1(s_)
+        q2 = self.dec_q2(s_)
+
+        a_avg = self.dec_a(s_)
+        a_std = self.a_std_log.exp()
+        logprob = -(((a_avg - action) / a_std).pow(2) / 2 + self.a_std_log + self.sqrt_2pi_log).sum(1)
+        return q1, q2, logprob
+
 
 
 """utils"""

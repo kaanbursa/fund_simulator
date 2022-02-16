@@ -1,11 +1,10 @@
 import torch
-from agents.Base.BaseAgent import AgentDDPG, AgentPPO#, #AgentSAC, AgentTD3, AgentA2C
+from agents.Base.deepagents import AgentDDPG, AgentPPO#, #AgentSAC, AgentTD3, AgentA2C
 from agents.Base.run import Arguments, train_and_evaluate
 from agents.wrappers.ObservationWrapper import NormalizedEnv
 from torch.utils.tensorboard import SummaryWriter
 from utils.pbt import sample_own_ppo_params, sample_sac_params
 import time
-from stable_baselines3.common.vec_env import VecNormalize, DummyVecEnv
 from utils.helper_training import *
 from data.preprocessing import *
 from env.BaseEnv import EnvConfig
@@ -32,7 +31,8 @@ class TrainerConfig:
     timesteps = 50000
     policy_kwargs = {}
     use_turbulance = False
-    normalize_env = False
+    normalize_env = True
+    normalize_reward = True
     clip_obs = 1
     population = 1
     gamma = 0.99
@@ -144,6 +144,7 @@ class DRLAgent:
                 model.net_dim = model_kwargs["net_dimension"]
                 model.target_step = model_kwargs["target_step"]
                 model.eval_gap = model_kwargs["eval_time_gap"]
+                model.episode = model_kwargs["episode"]
             except BaseException:
                 raise ValueError(
                     "Fail to read arguments, please check 'model_kwargs' input."
@@ -222,11 +223,15 @@ class DRLAgent:
         writter.add_text('Trainger Config', ', '.join(
             [str(k + ':' + str(v) + ' | ') for k, v in self.config.__dict__.items() if '__' not in k]))
         print('Writing hparams: ', self.config.hparams)
-        writter.add_hparams(self.config.hparams,
-                            {'hparam/end_total_asset': end_total_asset},
-                            run_name=period_trade)
+        try:
+            writter.add_hparams(self.config.hparams,
+                                {'hparam/end_total_asset': end_total_asset},
+                                run_name=period_trade)
+        except  Exception as e:
+            print(e)
+            print('Could not write the haparms', self.config.hparams, 'with end total asset of ', end_total_asset)
 
-        for i,asset in enumerate(all_assets_period):
+        for i,asset in enumerate(all_assets_period[1:]):
             writter.add_scalar('Asset over time', asset, i)
 
     def _increament_run_id(self) -> None:
@@ -241,7 +246,7 @@ class DRLAgent:
         self._increament_run_id()
         for j in range(self.population):
             previous_best_end_total_asset = 0
-
+            self.trade_all_assets = [self.env_config.INITIAL_ACCOUNT_BALANCE]
             self.model_name = model_name + '-agent-'  + str(j)
             self.last_state = []
             try:
@@ -297,10 +302,10 @@ class DRLAgent:
                     )
 
 
-                    seed = self.config.hparams['seed']
+
                     hparams = self.config.hparams
-                    hparams['seed'] = seed
-                    period = validation['Date'].iloc[0] + ' ' + validation['Date'].iloc[-1]
+
+
 
                     total_reward = 0
                     model.cwd = './trained_models'
@@ -315,22 +320,9 @@ class DRLAgent:
                     )
                     winner_hparams = self.config.hparams
 
-                    print(
-                        "======Recurrent PPO Validation from: ",
-                        self.unique_trade_date[
-                            i - self.config.rebalance_window - self.config.validation_window - time_frame
-                            ],
-                        "to ",
-                        self.unique_trade_date[i - self.config.rebalance_window],
-                    )
-
-                    print("Total reward at validation for Reccurent PPO", total_reward)
+                    print("Max reward at validation for Reccurent PPO", reward_max)
 
 
-
-                    print('=' * 80)
-                    print('Best params, ', winner_hparams)
-                    print('=' * 80)
                     self.config.hparams = winner_hparams
 
 
@@ -377,6 +369,7 @@ class DRLAgent:
                         cwd='./trained_models',
                         net_dimension=net_dimension
                     )
+                    self.trade_all_assets.extend(all_assets_period)
                     end_total_asset = all_assets_period[-1]
                     if end_total_asset > previous_best_end_total_asset:
                         previous_best_end_total_asset = end_total_asset
@@ -390,14 +383,15 @@ class DRLAgent:
                       , ' Creating new params')
                 hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
 
-                hparams['seed'] = seed
+
 
 
             # TO SUMMARY WRITER LIST OF THINGS TO ADD
             # MODEL VERSIONING (HParams)
             # DATASET VERSIONING (Name of stocks, Indicators)
-            self.summary_write(end_total_asset, all_assets_period)
-
+            
+            self.summary_write(end_total_asset, self.trade_all_assets)
+            self.trade_all_assets = [self.env_config.INITIAL_ACCOUNT_BALANCE]
             self.config.hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
             """self._save_model_info(
                                     winner_hparams,
@@ -415,6 +409,7 @@ class DRLAgent:
         start = time.time()
         self.last_state = []
         self._increament_run_id()
+        self.trade_all_assets = [self.env_config.INITIAL_ACCOUNT_BALANCE]
         for i in range(
                 self.config.rebalance_window + self.config.validation_window + time_frame,
                 len(self.unique_trade_date),
@@ -465,8 +460,6 @@ class DRLAgent:
                 "to ",
                 end_date,
             )
-
-            print(f"======Training Agents with the population of {self.population}========")
 
             seed = self.config.hparams['seed']
             hparams = self.config.hparams
@@ -562,6 +555,7 @@ class DRLAgent:
                 cwd='./trained_models',
                 net_dimension=net_dimension
             )
+            self.trade_all_assets.extend(episode_assets)
 
             self.summary_write(episode_assets[-1], all_assets_period=episode_assets)
 
@@ -570,7 +564,7 @@ class DRLAgent:
             ############## Trading ends ##############
 
         end = time.time()
-
+        self.trade_all_assets = [self.env_config.INITIAL_ACCOUNT_BALANCE]
         print("Ensemble Strategy took: ", (end - start) / 60, " minutes")
 
     def train_model(self, model, cwd, total_timesteps=5000):
@@ -613,6 +607,7 @@ class DRLAgent:
 
         episode_returns = list()  # the cumulative_return / initial_account
         episode_total_assets = list()
+
         episode_total_assets.append(env_trade.initial_total_asset)
         last_state = []
         done = False
@@ -629,6 +624,7 @@ class DRLAgent:
                 state, reward, done, _ = env_trade.step(action)
 
                 total_asset = env_trade.total_asset
+
                 episode_total_assets.append(total_asset)
                 episode_return = total_asset / env_trade.initial_total_asset
                 episode_returns.append(episode_return)

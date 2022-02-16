@@ -41,6 +41,8 @@ class StockEnvTrain(BaseTradeEnv):
 
         self.state = self._get_observation(initial=True)
 
+
+
         # initialize reward
         self.reward = 0
         self.cost = 0
@@ -103,6 +105,7 @@ class StockEnvTrain(BaseTradeEnv):
 
                     for index in buy_index:
                         # print('take buy action: {}'.format(actions[index]))
+                        self._calculate_avg_bought_price(index, actions[index])
                         self._buy_stock(index, actions[index])
             else:
                 for index in sell_index:
@@ -111,6 +114,7 @@ class StockEnvTrain(BaseTradeEnv):
 
                 for index in buy_index:
                     # print('take buy action: {}'.format(actions[index]))
+                    self._calculate_avg_bought_price(index, actions[index])
                     self._buy_stock(index, actions[index])
 
             self.day += 1

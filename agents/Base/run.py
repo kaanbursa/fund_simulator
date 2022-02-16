@@ -3,14 +3,16 @@ import sys
 import time
 
 import torch
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import multiprocessing as mp
 
 from agents.Base.env import build_env, build_eval_env
-from agents.Base.buffer import ReplayBuffer, ReplayBufferMP
+from agents.Base.buffer import ReplayBuffer, ReplayBufferMP, RolloutReccurentBufffer
 from agents.Base.evaluator import Evaluator
 
-"""[ElegantRL.2021.10.21](https://github.com/AI4Finance-Foundation/ElegantRL)"""
+from tqdm import tqdm
+
 
 
 class Arguments:  # [ElegantRL.2021.10.21]
@@ -60,6 +62,7 @@ class Arguments:  # [ElegantRL.2021.10.21]
         self.if_remove = True  # remove the cwd folder? (True, False, None:ask me)
         self.break_step = +np.inf  # break training after 'total_step > break_step'
         self.if_allow_break = True  # allow break training when reach goal (early termination)
+        self.episode = 5
 
         self.eval_env = env_val  # the environment for evaluating. None means set automatically.
         self.eval_gap = 2 ** 8  # evaluate the agent per eval_gap seconds
@@ -114,6 +117,19 @@ class Arguments:  # [ElegantRL.2021.10.21]
 def train_and_evaluate(args, learner_id=0):
     args.init_before_training()  # necessary!
 
+    def write_summary(logger, episode) -> None:
+        """Writes to an event file based on the run-id argument.
+                Args:
+                    update {int} -- Current PPO Update
+                    training_stats {list} -- Statistics of the training algorithm
+                    episode_result {dict} -- Statistics of completed episodes
+        """
+        writer = SummaryWriter()
+
+        for key, value in logger.items():
+
+            writer.add_scalar(f"episode_losses/{key}", value, episode)
+
     '''init: Agent'''
     agent = args.agent
 
@@ -157,19 +173,22 @@ def train_and_evaluate(args, learner_id=0):
             _steps, _r_exp = get_step_r_exp(ten_reward=ten_other[0])  # other = (reward, mask, action)
             return _steps, _r_exp
     else:
-        buffer = list()
+        if agent.is_recurrent:
+            buffer = RolloutReccurentBufffer()
+        else:
+            buffer = list()
 
-        def update_buffer(_traj_list):
-            (ten_state, ten_reward, ten_mask, ten_action, ten_noise) = _traj_list[0]
+            def update_buffer(_traj_list):
+                (ten_state, ten_reward, ten_mask, ten_action, ten_noise) = _traj_list[0]
 
-            buffer[:] = (ten_state.squeeze(1),
-                         ten_reward,
-                         ten_mask,
-                         ten_action.squeeze(1),
-                         ten_noise.squeeze(1))
+                buffer[:] = (ten_state.squeeze(1),
+                             ten_reward,
+                             ten_mask,
+                             ten_action.squeeze(1),
+                             ten_noise.squeeze(1))
 
-            _step, _r_exp = get_step_r_exp(ten_reward=buffer[1])
-            return _step, _r_exp
+                _step, _r_exp = get_step_r_exp(ten_reward=buffer[1])
+                return _step, _r_exp
 
     """start training"""
     cwd = args.cwd
@@ -181,6 +200,7 @@ def train_and_evaluate(args, learner_id=0):
     reward_scale = args.reward_scale
     if_allow_break = args.if_allow_break
     soft_update_tau = args.soft_update_tau
+    episode = args.episode
     del args
 
     '''init ReplayBuffer after training start'''
@@ -195,22 +215,32 @@ def train_and_evaluate(args, learner_id=0):
 
     '''start training loop'''
     if_train = True
+    # TODO: create multiple
+    time_length = len(env.df.Date.unique())
 
-    while if_train:
+    assert target_step > time_length, f"Given time length {time_length} is shorter than trading period"
+    episode = target_step // time_length
+
+    cur_episode = 0
+    for ep in tqdm(range(episode)):
+        # Create trajectories with current policy for one period
 
         with torch.no_grad():
-            traj_list = agent.explore_env(env, target_step, reward_scale, gamma)
+            traj_list = agent.explore_env(env, time_length, reward_scale, gamma) # time length was target_step
 
             steps, r_exp = update_buffer(traj_list)
 
         logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau) # (Actor loss, Critic Loss, Action_std_log)
+        logging_dict = dict((x,y) for x,y in zip(('actor_loss','critic_loss','Action_std_log'), logging_tuple))
+
+        write_summary(logging_dict, ep)
 
         with torch.no_grad():
-
+            # TODO: Implement Early Stopping
             if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
 
             if_train = if_reach_goal
-
+            cur_episode += 1
             """if_train = not ((if_allow_break and if_reach_goal)
                             or evaluator.total_step > break_step
                             or os.path.exists(f'{cwd}/stop'))"""

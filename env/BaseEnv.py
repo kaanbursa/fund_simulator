@@ -23,6 +23,7 @@ class EnvConfig:
     REWARD_INTERVAL = 3
     seed = 42
     use_turbulance = False
+    stock_first_state = False
 
 
 class BaseTradeEnv(gym.Env):
@@ -31,6 +32,8 @@ class BaseTradeEnv(gym.Env):
     metadata = {"render.modes": ["human"]}
 
     def __init__(self, stock_dim, index_df, time_window, config=EnvConfig):
+        #TODO: add function to calculate if the stock was sold for loss or profit
+        #TODO: add dataset building to have the ability to add features in order with stock
         self.config = config
         self.time_window= time_window
         self.stock_dim = stock_dim
@@ -54,6 +57,11 @@ class BaseTradeEnv(gym.Env):
         self.grade = 1
 
     def _get_observation(self, initial: bool):
+        """
+        Returns the state of the day
+        :param initial:
+        :return:
+        """
         indicators = []
 
         for ind in self.config.INDICATORS:
@@ -170,11 +178,12 @@ class BaseTradeEnv(gym.Env):
 
     def _calculate_avg_bought_price(self, index, action):
         # action is new amount for buying
+        # Previous holding
         holding = self.state[1 + self.stock_dim +index]
         cur_price = self.state[1 + index]
         prev_avg_bought_price = self.avg_bought_prices[index]
         # for buying
-        self.avg_bought_prices[index] = (prev_avg_bought_price * holding) + (cur_price * action) / (holding + action)
+        self.avg_bought_prices[index] = ((prev_avg_bought_price * holding) + (cur_price * action)) / (holding + action)
 
 
     def _buy_stock(self, index, action):

@@ -30,9 +30,9 @@ day_trade_indicators = [
 ]
 
 indicator_list = [
-    "open",
-    "high",
-    "low",
+    "Open",
+    "High",
+    "Low",
     "macd",
     "tema",
     "boll",

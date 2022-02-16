@@ -370,3 +370,26 @@ class RolloutReccurentBufffer:
         self.log_probs = torch.zeros((self.n_workers, self.worker_steps)) # actor out
         self.values = torch.zeros((self.n_workers, self.worker_steps)) # critic out
         self.advantages = torch.zeros((self.n_workers, self.worker_steps)) # calculated adv
+
+    def pad_sequence(self, sequence:np.ndarray, target_length:int) -> np.ndarray:
+        """
+        pad Sequence to the target length using zeros
+        :param sequence:
+        :param target_length:
+        :return:
+        """
+
+        delta_length = target_length - len(sequence)
+
+        sequence = torch.from_numpy(np.vstack(sequence).astype(np.float))
+
+        if delta_length <= 0:
+            return sequence
+
+        if len(sequence.shape) > 1:
+            padding = torch.zeros(((delta_length,) + sequence.shape[1:]), dtype=sequence.dtype)
+
+        else:
+            padding = torch.zeros(delta_length, dtype=sequence.dtype)
+
+        return torch.cat((sequence, padding), axis=0)

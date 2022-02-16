@@ -89,7 +89,7 @@ class Evaluator:
                   f"{r_avg:8.2f}{r_std:7.1f}{s_avg:7.0f}{s_std:6.0f} |"
                   f"{r_exp:8.2f}{''.join(f'{n:7.2f}' for n in log_tuple)}")
 
-            # TODO: Stop training after some epochs
+
             if_stop_train = False
             self.draw_plot()
             return if_stop_train, if_save, r_avg, s_avg
