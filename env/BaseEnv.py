@@ -25,6 +25,10 @@ class EnvConfig:
     use_turbulance = False
     stock_first_state = False
 
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
 
 class BaseTradeEnv(gym.Env):
     """A stock trading environment for OpenAI gym"""
@@ -54,7 +58,7 @@ class BaseTradeEnv(gym.Env):
         # It will be updated when the asset is bought ht the price will be stop loss %n of the bought price
         self.stop_loss_prices = [0] * self.stock_dim
         self.shorted = 0
-        self.grade = 1
+        self.grade = 0
 
     def _get_observation(self, initial: bool):
         """
@@ -62,21 +66,31 @@ class BaseTradeEnv(gym.Env):
         :param initial:
         :return:
         """
-        indicators = []
+        data = []
+        if self.config.stock_first_state:
+            for ticker in self.df.loc[self.day].ticker.unique():
+                datas =  self.data.loc[self.data.ticker == ticker, self.config.INDICATORS].values.flatten().tolist()
+                data.extend(datas)
+                assert len(datas) == len(self.config.INDICATORS), f'indicator dimension does not match indicator dimension for stocks {self.data.ticker.unique()}'
 
-        for ind in self.config.INDICATORS:
-            #TODO: get rid of this
-            inds = self.data[ind].values.tolist()
+        else:
 
-            assert len(inds) == self.stock_dim, f'stock dimension does not match indicator dimension for stocks {self.df.loc[self.day -1].ticker.unique()}'
-            indicators.extend(self.data[ind].values.tolist())
+            for ind in self.config.INDICATORS:
+
+                inds = self.data[ind].values.tolist()
+
+                assert len(inds) == self.stock_dim, f'stock dimension does not match indicator dimension for stocks {self.df.loc[self.day -1].ticker.unique()}'
+                data.extend(inds)
+
+
+
         if self.time_window == 0:
             if initial:
                 state = (
                     [self.config.INITIAL_ACCOUNT_BALANCE]
                     + self.data.adjcp.values.tolist()
                     + [0] * self.stock_dim
-                    + indicators
+                    + data
                     # + self.index.index_close.values.tolist()
                     # + self.index.index_macd.values.tolist()
                     # + self.index.index_rsi.values.tolist()
@@ -88,7 +102,7 @@ class BaseTradeEnv(gym.Env):
                     [self.state[0]]
                     + self.data.adjcp.values.tolist()
                     + list(self.state[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)])
-                    + indicators
+                    + data
                     # + self.index.index_close.values.tolist()
                     # + self.index.index_macd.values.tolist()
                     # + self.index.index_rsi.values.tolist()
@@ -101,7 +115,7 @@ class BaseTradeEnv(gym.Env):
                     [self.config.INITIAL_ACCOUNT_BALANCE]
                     + self.data.adjcp.values.tolist()
                     + [0] * self.stock_dim
-                    + indicators
+                    + data
                     # + self.index.index_close.values.tolist()
                     # + self.index.index_macd.values.tolist()
                     # + self.index.index_rsi.values.tolist()
@@ -115,7 +129,7 @@ class BaseTradeEnv(gym.Env):
                     [self.state[0]]
                     + self.data.adjcp.values.tolist()
                     + list(self.state[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)])
-                    + indicators
+                    + data
                     # + self.index.index_close.values.tolist()
                     # + self.index.index_macd.values.tolist()
                     # + self.index.index_rsi.values.tolist()
@@ -291,7 +305,8 @@ class BaseTradeEnv(gym.Env):
         todays total asset - previous total asset) + (sharpe_ratio - 1 ) * scaler
         # TODO add auxilarry tasks
         # TODO: add cirriculum for agent to learn
-        # TODO: track highest buying point punish if sold lower
+        # TODO: track avg buying point punish if sold lower
+        # TODO: Kelly criterion
         # 1. learn not to sell on loss
         # 2. Learn to generate alpha on stock
         # 3. Diversify
@@ -329,6 +344,7 @@ class BaseTradeEnv(gym.Env):
                 if self.cash < end_total_asset * 0.05:
                     #reward -= abs(reward) * 0.6 # Penalty if cash is less than 5 percent of portfolio
                     reward = - 500
+
                 return reward
             else:
                 return 0
@@ -340,6 +356,7 @@ class BaseTradeEnv(gym.Env):
                 reward += (end_total_asset - benchmark) * 2
                 """if self.cash < end_total_asset * 0.05:
                     reward -= abs(reward) * 0.6"""
+
                 return reward
             else:
                 return 0

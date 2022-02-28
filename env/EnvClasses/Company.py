@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from data.preprocessing import DataProcessor
+from newsapi import NewsApiClient
 import yfinance as yf
 
 
@@ -9,6 +10,9 @@ class OrganizationBase:
         self.name = name
         self.type = org_type
         self.data_processor = DataProcessor(org_type, tickers=[])
+        news_api = ''
+        self.newsapi = NewsApiClient(api_key=news_api)
+        self.sources = self.newsapi.get_sources()
 
     def get_price(self, start, end):
         """
@@ -53,13 +57,24 @@ class OrganizationBase:
         :return:
         """
 
-    def get_news(self, start, end):
+    def get_news(self, start, end, sources= '', domain=''):
         """
         Finds news of the company
         :param start: Starting period
         :param end: Ending period for the new
         :return:
         """
+
+        assert sources in self.sources, 'source not found'
+        all_articles = self.newsapi.get_everything(q=self.name,
+                                              sources=sources,
+                                              domains=domain,
+                                              from_param=start,
+                                              to=end,
+                                              language='en',
+                                              sort_by='relevancy',
+                                              page=2)
+        return all_articles
 
     def create_technical_indicators(self, indicators_list : list):
         """
@@ -90,6 +105,7 @@ class OrganizationBase:
         :param social_profile: social profile of the company
         :return:
         """
+
 
 
 class Company(OrganizationBase):

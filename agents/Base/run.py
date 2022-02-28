@@ -8,7 +8,7 @@ import numpy as np
 import multiprocessing as mp
 
 from agents.Base.env import build_env, build_eval_env
-from agents.Base.buffer import ReplayBuffer, ReplayBufferMP, RolloutReccurentBufffer
+from agents.Base.buffer import ReplayBuffer, ReplayBufferMP, RecurrentBuffer
 from agents.Base.evaluator import Evaluator
 
 from tqdm import tqdm
@@ -29,6 +29,7 @@ class Arguments:  # [ElegantRL.2021.10.21]
 
         self.agent = agent  # Deep Reinforcement Learning algorithm
         self.if_off_policy = agent.if_off_policy  # agent is on-policy or off-policy
+        self.is_recurrent = agent.is_recurrent
         if self.if_off_policy:  # off-policy
             self.net_dim = 2 ** 8  # the network width
             self.max_memo = 2 ** 21  # capacity of replay buffer
@@ -43,6 +44,11 @@ class Arguments:  # [ElegantRL.2021.10.21]
             self.target_step = self.max_memo  # repeatedly update network to keep critic's loss small
             self.repeat_times = 2 ** 3  # collect target_step, then update network
             self.if_per_or_gae = False  # use PER: GAE (Generalized Advantage Estimation) for sparse reward
+
+        if self.is_recurrent:
+            self.hidden_state_size = agent.hidden_dim
+            self.sequence_length = agent.sequence_length
+
 
         '''Arguments for training'''
         self.gamma = 0.99  # discount factor of future rewards
@@ -117,6 +123,8 @@ class Arguments:  # [ElegantRL.2021.10.21]
 def train_and_evaluate(args, learner_id=0):
     args.init_before_training()  # necessary!
 
+
+
     def write_summary(logger, episode) -> None:
         """Writes to an event file based on the run-id argument.
                 Args:
@@ -174,7 +182,15 @@ def train_and_evaluate(args, learner_id=0):
             return _steps, _r_exp
     else:
         if agent.is_recurrent:
-            buffer = RolloutReccurentBufffer()
+            buffer = RecurrentBuffer(config={}, observation_space=args.env.observation_space, device=agent.device)
+
+            def update_buffer(_traj_list):
+                ten_state, ten_other = _traj_list[0]
+                buffer.extend(_traj_list)
+
+                _steps, _r_exp = get_step_r_exp(ten_reward=ten_other[0])  # other = (reward, mask, action)
+                return _steps, _r_exp
+
         else:
             buffer = list()
 
@@ -215,15 +231,17 @@ def train_and_evaluate(args, learner_id=0):
 
     '''start training loop'''
     if_train = True
-    # TODO: create multiple
+
     time_length = len(env.df.Date.unique())
 
     assert target_step > time_length, f"Given time length {time_length} is shorter than trading period"
-    episode = target_step // time_length
+    if not episode:
+        episode = target_step // time_length
 
     cur_episode = 0
+
     for ep in tqdm(range(episode)):
-        # Create trajectories with current policy for one period
+        # Create trajectories with current policy for given timesteps
 
         with torch.no_grad():
             traj_list = agent.explore_env(env, time_length, reward_scale, gamma) # time length was target_step
@@ -236,11 +254,14 @@ def train_and_evaluate(args, learner_id=0):
         write_summary(logging_dict, ep)
 
         with torch.no_grad():
-            # TODO: Implement Early Stopping
+
             if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
 
             if_train = if_reach_goal
             cur_episode += 1
+            if if_reach_goal:
+                print(f'Reached goals on {steps}')
+                break
             """if_train = not ((if_allow_break and if_reach_goal)
                             or evaluator.total_step > break_step
                             or os.path.exists(f'{cwd}/stop'))"""

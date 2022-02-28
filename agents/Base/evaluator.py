@@ -90,7 +90,7 @@ class Evaluator:
                   f"{r_exp:8.2f}{''.join(f'{n:7.2f}' for n in log_tuple)}")
 
 
-            if_stop_train = False
+            if_stop_train = False if self.r_max < 4 else True
             self.draw_plot()
             return if_stop_train, if_save, r_avg, s_avg
 

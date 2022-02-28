@@ -45,8 +45,8 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
     now = datetime.now()
     np.random.seed(now.second + now.microsecond)
 
-    #Change seed?
-    seed = int(suggest_uniform('seed', 1,10000))
+    episode = int(suggest_uniform('episode', 1, 15))
+    seed = suggest_categorical('seed', [31, 69, 42069])
     batch_size = suggest_categorical("batch_size", [32, 64, 128, 256, 512])
     eval_time_gap = suggest_categorical("n_steps", [8, 16, 32, 64, 128, 256, 512, 1024, 2048])
     gamma = suggest_categorical("gamma", [0.9, 0.95, 0.98, 0.99, 0.995, 0.999, 0.9999])
@@ -84,6 +84,8 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
 
     #activation_fn = {"tanh": nn.Tanh, "relu": nn.ReLU, "elu": nn.ELU, "leaky_relu": nn.LeakyReLU}[activation_fn]
 
+
+
     new_hparams = {
         "eval_time_gap": eval_time_gap,
         "batch_size": batch_size,
@@ -91,6 +93,8 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
         "learning_rate": learning_rate,
         "target_step": target_step,
         "net_dimension":net_dimension,
+        "eval_time_gap":eval_time_gap,
+        "episode": episode,
         "seed":seed
     }
 

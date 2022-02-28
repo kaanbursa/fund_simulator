@@ -30,6 +30,7 @@ optimize alpha generated and minimize risk.
 - [ ] Day Trading Environment
 - [ ] MARL
 - [ ] Ensemble voting for trading strategy
+- [ ] Kelly Criterion Auxilary task
 - Data Selection Add to Preprocess
   - [ ] Correlation Table as input
   - [x] Past prices for the input

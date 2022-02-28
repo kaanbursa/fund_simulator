@@ -1,5 +1,7 @@
 import torch
-from agents.Base.deepagents import AgentDDPG, AgentPPO#, #AgentSAC, AgentTD3, AgentA2C
+from agents.Base.deepagents import AgentDDPG #, #AgentSAC, AgentTD3, AgentA2C
+from agents.agents.ppo import AgentPPO
+from agents.agents.rec_ppo import AgentRecurrentPPO
 from agents.Base.run import Arguments, train_and_evaluate
 from agents.wrappers.ObservationWrapper import NormalizedEnv
 from torch.utils.tensorboard import SummaryWriter
@@ -9,7 +11,7 @@ from utils.helper_training import *
 from data.preprocessing import *
 from env.BaseEnv import EnvConfig
 from utils.indicators import indicator_list, indicators_stock_stats
-MODELS = {"ddpg": AgentDDPG,  "ppo": AgentPPO}
+MODELS = {"ddpg": AgentDDPG,  "ppo": AgentPPO, 'recurrent_ppo':AgentRecurrentPPO}
 OFF_POLICY_MODELS = ["ddpg", "td3", "sac"]
 ON_POLICY_MODELS = ["ppo", "a2c"]
 """MODEL_KWARGS = {x: config.__dict__[f"{x.upper()}_PARAMS"] for x in MODELS.keys()}
@@ -45,6 +47,9 @@ class TrainerConfig:
         'target_step':160,
         'eval_time_gap':10
     }
+    buffer_params = {
+
+    }
 
     #Paths
     stocks_file_path = './data/all_stocks.csv'
@@ -72,7 +77,7 @@ class DRLAgent:
     """
 
     def __init__(self, model_name, model_type,
-                 env_train, env_val, env_trade, data, config, model_kwargs, train_config= TrainerConfig):
+                 env_train, env_val, env_trade, data, model_kwargs, train_config= TrainerConfig, config=EnvConfig):
         self.env_train = env_train
         self.env_val = env_val
         self.env_trade = env_trade
@@ -84,6 +89,7 @@ class DRLAgent:
         self.model_name = model_name
         self.population = train_config.population
         self.agent = MODELS[model_type]()
+
         self.dataset_version = train_config.dataset_version
         self.config.hparams = model_kwargs
         self.model_type = model_type
@@ -127,6 +133,8 @@ class DRLAgent:
         env_train, env_val = self.build_envs(train_data, val_data, i)
         env_train.env_num = 1
 
+
+
         env_val.env_num = 1
 
         model = Arguments(env_train, env_val, self.agent)
@@ -136,6 +144,7 @@ class DRLAgent:
             model.if_off_policy = False
 
         if model_kwargs is not None:
+            print(model_kwargs)
             try:
                 model.learning_rate = model_kwargs["learning_rate"]
                 model.batch_size = model_kwargs["batch_size"]
@@ -220,8 +229,11 @@ class DRLAgent:
         period_trade = self.config.start_trade + '-' + self.config.end_date.strftime("%Y/%m/%d")
         writter.add_text('Period', 'Training period : ' + period + 'Trading period : ' + period_trade)
 
-        writter.add_text('Trainger Config', ', '.join(
+        writter.add_text('Trainer Config', ', '.join(
             [str(k + ':' + str(v) + ' | ') for k, v in self.config.__dict__.items() if '__' not in k]))
+
+        writter.add_text('Environment Config', ', '.join(
+            [str(k + ':' + str(v) + ' | ') for k, v in self.env_config.__dict__.items() if '__' not in k]))
         print('Writing hparams: ', self.config.hparams)
         try:
             writter.add_hparams(self.config.hparams,
@@ -249,6 +261,7 @@ class DRLAgent:
             self.trade_all_assets = [self.env_config.INITIAL_ACCOUNT_BALANCE]
             self.model_name = model_name + '-agent-'  + str(j)
             self.last_state = []
+            check_for_progress = 0
             try:
 
                 for i in range(
@@ -258,6 +271,8 @@ class DRLAgent:
                 ):
                     print("============================================")
                     print('Agent: ', j)
+
+
                     ## initial state is empty
                     if i - self.config.rebalance_window - self.config.validation_window - time_frame == 0:
                         # inital state
@@ -301,11 +316,7 @@ class DRLAgent:
                         end_date,
                     )
 
-
-
                     hparams = self.config.hparams
-
-
 
                     total_reward = 0
                     model.cwd = './trained_models'
@@ -321,10 +332,6 @@ class DRLAgent:
                     winner_hparams = self.config.hparams
 
                     print("Max reward at validation for Reccurent PPO", reward_max)
-
-
-                    self.config.hparams = winner_hparams
-
 
                     model_ensemble = model.agent
 
@@ -375,13 +382,23 @@ class DRLAgent:
                         previous_best_end_total_asset = end_total_asset
                         winner_hparams = self.config.hparams
 
+                    if check_for_progress > int((len(self.unique_trade_date) //  (self.config.rebalance_window + self.config.validation_window)) / 2):
+
+                        # If it has traded for more than half of the trading periods and still not passed buy and hold next hparams
+
+                        bnh = self.calculate_buy_and_hold(iter=i)
+                        if bnh > end_total_asset:
+                            print('Buy and hold bigger than performances')
+                            break
+                    check_for_progress += 1
+
 
                     # print("============Trading Done============")
                     ############## Trading ends ##############
-            except:
-                print('Model destabilized with params: '
-                      , ' Creating new params')
-                hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
+            except Exception as e:
+                print('Error: ', e)
+
+                self.config.hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
 
 
 
@@ -404,6 +421,30 @@ class DRLAgent:
         end = time.time()
 
         print("Population Based Strategy took: ", (end - start) / 60, " minutes")
+
+    def calculate_buy_and_hold(self, iter) -> int:
+        """
+        Calculate buy and hold value for the stock given window
+        :param iter:
+        :return: (int) Last portfolio value
+        """
+        print('Calculating buy and hold')
+        start_trade_date = self.config.start_trade
+        today = self.unique_trade_date[iter]
+
+        data = data_split(self.data, start_trade_date, today)
+
+        stock_dim = len(data.ticker.unique())
+        account_balance = float(self.env_config.INITIAL_ACCOUNT_BALANCE) / stock_dim
+        balances = np.array([account_balance] * stock_dim)
+        first_prices = np.array(data.loc[0 , 'adjcp'].replace(0, 1).values.tolist())
+
+        dates_prices = np.array(data.loc[int(len(data) / stock_dim) -1, 'adjcp'].replace(0, 1).values.tolist())  # todays price
+
+        pct_changes = (dates_prices - first_prices) / first_prices
+        portfolio_value = sum(balances + (balances * pct_changes))
+        print('Buy and hold value is ', portfolio_value)
+        return portfolio_value
 
     def run_prediction(self, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
         start = time.time()

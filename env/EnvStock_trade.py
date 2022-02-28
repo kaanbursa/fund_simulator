@@ -537,8 +537,17 @@ class StockEnvTrade(BaseTradeEnv):
 
 
             indicators = []
-            for ind in self.config.INDICATORS:
-                indicators.extend(self.data[ind].values.tolist())
+            if self.config.stock_first_state:
+                for ticker in self.df.loc[self.day].ticker.unique():
+                    datas = self.data.loc[self.data.ticker == ticker, self.config.INDICATORS].values.flatten().tolist()
+                    indicators.extend(datas
+                        )
+                    assert len(
+                        datas) == len(self.config.INDICATORS), f'indicator dimension does not match indicator dimension for stocks {self.data.ticker.unique()}'
+
+            else:
+                for ind in self.config.INDICATORS:
+                    indicators.extend(self.data[ind].values.tolist())
             if self.time_window == 0:
                 self.state = (
                     [self.previous_state[0]]
