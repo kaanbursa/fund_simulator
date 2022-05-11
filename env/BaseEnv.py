@@ -20,10 +20,15 @@ class EnvConfig:
     INDICATORS = indicator_list
     OBSERVATIONS = len(indicator_list) + 2
     INDEX_OBSERVATIONS = 3
-    REWARD_INTERVAL = 3
+    REWARD_INTERVAL = 1
     seed = 42
     use_turbulance = False
     stock_first_state = False
+    quantity_buying = True # whether the agent buy shares or dollars
+    add_index = False
+    reward_grade = 0
+    if not quantity_buying:
+        print('Please check your HMAX Normalize hparameter since you dont buy shares')
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -58,7 +63,9 @@ class BaseTradeEnv(gym.Env):
         # It will be updated when the asset is bought ht the price will be stop loss %n of the bought price
         self.stop_loss_prices = [0] * self.stock_dim
         self.shorted = 0
-        self.grade = 0
+        self.grade = self.config.reward_grade
+
+        self.quantity_buying = self.config.quantity_buying
 
     def _get_observation(self, initial: bool):
         """
@@ -83,7 +90,7 @@ class BaseTradeEnv(gym.Env):
                 data.extend(inds)
 
 
-
+        # Add: avg bought price
         if self.time_window == 0:
             if initial:
                 state = (
@@ -161,6 +168,11 @@ class BaseTradeEnv(gym.Env):
         Sell and short shares
         """
         if self.state[index + self.stock_dim + 1] > 0:
+            if not self.quantity_buying:
+                # IF we want our agent to buy dolar amount of shares we convert action to quantity here
+                # Convert dolar action to quantity here
+                # Calculate how much shares does that dollar amount buys
+                action = action // self.state[index + 1]
             # Update shorted amount left from long holdings
             # Normal long action
             # update balance
@@ -206,6 +218,11 @@ class BaseTradeEnv(gym.Env):
         """
         # If it is tradable
         if self.state[1 + index] > 0:
+            if not self.quantity_buying:
+                # IF we want our agent to buy dolar amount of shares we convert action to quantity here
+                # Convert dolar action to quantity here
+                # Calculate how much shares does that dollar amount buys
+                action = action // self.state[index + 1]
             # perform buy action based on the sign of the action
             available_amount = max(self.state[0] // self.state[index + 1], 0)
             # print('available_amount:{}'.format(available_amount))
@@ -306,7 +323,8 @@ class BaseTradeEnv(gym.Env):
         # TODO add auxilarry tasks
         # TODO: add cirriculum for agent to learn
         # TODO: track avg buying point punish if sold lower
-        # TODO: Kelly criterion
+        # TODO: portfolio Kelly criterion
+        # TODO: add win loss
         # 1. learn not to sell on loss
         # 2. Learn to generate alpha on stock
         # 3. Diversify
@@ -341,10 +359,9 @@ class BaseTradeEnv(gym.Env):
                 # Add alpha to reward or substract
                 #reward += (end_total_asset - benchmark) * 2
                 #print(f'Reward:  {reward} Begin Asset: {begin_total_asset} End Asset: {end_total_asset}')
-                if self.cash < end_total_asset * 0.05:
+                #if self.cash < end_total_asset * 0.05:
                     #reward -= abs(reward) * 0.6 # Penalty if cash is less than 5 percent of portfolio
-                    reward = - 500
-
+                    #reward = reward - 500
                 return reward
             else:
                 return 0

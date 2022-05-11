@@ -68,6 +68,7 @@ class AgentBase:
         self.traj_list = [list() for _ in range(env_num)]
         self.device = torch.device(f"cuda:{gpu_id}" if (torch.cuda.is_available() and (gpu_id >= 0)) else "cpu")
         print('Using device: ', self.device)
+        self.learning_rate = learning_rate
 
 
         self.cri = self.ClassCri(int(net_dim * 1.25), state_dim, action_dim).to(self.device)
@@ -75,8 +76,8 @@ class AgentBase:
         self.cri_target = deepcopy(self.cri) if self.if_use_cri_target else self.cri
         self.act_target = deepcopy(self.act) if self.if_use_act_target else self.act
 
-        self.cri_optim = torch.optim.Adam(self.cri.parameters(), learning_rate)
-        self.act_optim = torch.optim.Adam(self.act.parameters(), learning_rate) if self.ClassAct else self.cri
+        self.cri_optim = torch.optim.Adam(self.cri.parameters(), self.learning_rate)
+        self.act_optim = torch.optim.Adam(self.act.parameters(), self.learning_rate) if self.ClassAct else self.cri
 
         assert isinstance(if_per_or_gae, bool)
 

@@ -10,6 +10,7 @@ import multiprocessing as mp
 from agents.Base.env import build_env, build_eval_env
 from agents.Base.buffer import ReplayBuffer, ReplayBufferMP, RecurrentBuffer
 from agents.Base.evaluator import Evaluator
+from agents.Base.utils import polynomial_decay
 
 from tqdm import tqdm
 
@@ -45,9 +46,8 @@ class Arguments:  # [ElegantRL.2021.10.21]
             self.repeat_times = 2 ** 3  # collect target_step, then update network
             self.if_per_or_gae = False  # use PER: GAE (Generalized Advantage Estimation) for sparse reward
 
-        if self.is_recurrent:
-            self.hidden_state_size = agent.hidden_dim
-            self.sequence_length = agent.sequence_length
+
+
 
 
         '''Arguments for training'''
@@ -76,6 +76,18 @@ class Arguments:  # [ElegantRL.2021.10.21]
         self.eval_times2 = 2 ** 4  # number of times that get episode return in second
         self.eval_gpu_id = None  # -1 means use cpu, >=0 means use GPU, None means set as learner_gpus[0]
         self.if_overwrite = False  # Save policy networks with different episode return or overwrite
+        # Set config dictionary for recurrent buffer and agent
+        if self.is_recurrent:
+            self.recurrent_config = {
+                'hidden_state_size': agent.hidden_dim,
+                'sequence_length': agent.sequence_length,
+                'n_workers':self.worker_num,
+                'worker_steps':self.target_step,
+                'n_mini_batch':self.batch_size,
+                'recurrent_n_layer':1,
+                'use_orthogonal':True,
+                'layer_type':'lstm'
+            }
 
     def init_before_training(self):
         np.random.seed(self.random_seed)
@@ -140,10 +152,16 @@ def train_and_evaluate(args, learner_id=0):
 
     '''init: Agent'''
     agent = args.agent
+    if isinstance(args.learning_rate, dict):
+        learning_rate_start =  args.learning_rate['start']
+        learning_rate_end = args.learning_rate['end']
+    else:
+        learning_rate_start = args.learning_rate
+
 
     agent.init(net_dim=args.net_dim, gpu_id=args.learner_gpus[learner_id],
                state_dim=args.state_dim, action_dim=args.action_dim, env_num=args.env_num,
-               learning_rate=args.learning_rate, if_per_or_gae=args.if_per_or_gae)
+               learning_rate=learning_rate_start, if_per_or_gae=args.if_per_or_gae)
 
     agent.save_or_load_agent(args.cwd, if_save=False)
 
@@ -182,13 +200,20 @@ def train_and_evaluate(args, learner_id=0):
             return _steps, _r_exp
     else:
         if agent.is_recurrent:
-            buffer = RecurrentBuffer(config={}, observation_space=args.env.observation_space, device=agent.device)
 
+            """buffer = RecurrentBuffer(config=args.recurrent_config,
+                                     observation_space=args.env.observation_space, device=agent.device)"""
+            buffer = list()
             def update_buffer(_traj_list):
-                ten_state, ten_other = _traj_list[0]
-                buffer.extend(_traj_list)
 
-                _steps, _r_exp = get_step_r_exp(ten_reward=ten_other[0])  # other = (reward, mask, action)
+                (ten_state, ten_hidden_state, ten_cell_state, ten_reward, ten_mask, ten_action, ten_noise, ten_values, ten_critic_hidden, ten_cri_cell) = _traj_list[0]
+
+                buffer [:] = (ten_state.squeeze(1),
+                              ten_hidden_state, ten_cell_state,
+                              ten_reward, ten_mask, ten_action.squeeze(1),
+                              ten_noise.squeeze(1), ten_values.squeeze(1), ten_critic_hidden, ten_cri_cell)
+
+                _steps, _r_exp = get_step_r_exp(ten_reward=ten_state[0])  # other = (reward, mask, action)
                 return _steps, _r_exp
 
         else:
@@ -217,6 +242,7 @@ def train_and_evaluate(args, learner_id=0):
     if_allow_break = args.if_allow_break
     soft_update_tau = args.soft_update_tau
     episode = args.episode
+    learning_rate = args.learning_rate
     del args
 
     '''init ReplayBuffer after training start'''
@@ -242,7 +268,6 @@ def train_and_evaluate(args, learner_id=0):
 
     for ep in tqdm(range(episode)):
         # Create trajectories with current policy for given timesteps
-
         with torch.no_grad():
             traj_list = agent.explore_env(env, time_length, reward_scale, gamma) # time length was target_step
 
@@ -254,8 +279,7 @@ def train_and_evaluate(args, learner_id=0):
         write_summary(logging_dict, ep)
 
         with torch.no_grad():
-
-            if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
+            if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple, agent.is_recurrent)
 
             if_train = if_reach_goal
             cur_episode += 1
@@ -265,7 +289,11 @@ def train_and_evaluate(args, learner_id=0):
             """if_train = not ((if_allow_break and if_reach_goal)
                             or evaluator.total_step > break_step
                             or os.path.exists(f'{cwd}/stop'))"""
-
+        # decay
+        if isinstance(learning_rate, dict):
+            new_lr =polynomial_decay(learning_rate_start, learning_rate_end, episode, 0.8, ep)
+            agent.cri_optim.lr = new_lr
+            agent.act_optim.lr = new_lr
     print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd} | Total Step: {steps}')
 
     agent.save_or_load_agent(cwd, if_save=True)
@@ -316,6 +344,9 @@ def train_and_evaluate_mp(args, agent_id=0):
     [(p.start(), time.sleep(0.1)) for p in process]
     process[-1].join()
     process_safely_terminate(process)
+
+
+""""""
 
 
 class PipeWorker:
@@ -671,6 +702,9 @@ class PipeEvaluator:  # [ElegantRL.10.21]
 
         print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd}')
         evaluator.save_or_load_recoder(if_save=True)
+
+
+
 
 
 # class PipeVectorEnv:

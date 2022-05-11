@@ -35,6 +35,7 @@ class AgentPPO(AgentBase):
         self.lambda_a_value = 1.00  # could be 0.25~8.00, the lambda of advantage value
         self.lambda_gae_adv = 0.98  # could be 0.95~0.99, GAE (Generalized Advantage Estimation. ICLR.2016.)
         self.get_reward_sum = None  # self.get_reward_sum_gae if if_use_gae else self.get_reward_sum_raw
+        self.updated_times = 0
 
     def init(self, net_dim=256, state_dim=8, action_dim=2,
              learning_rate=1e-4, if_per_or_gae=False, env_num=1, gpu_id=0):
@@ -221,6 +222,7 @@ class AgentPPO(AgentBase):
             training_stats["policy_loss"] = obj_actor.item()
             training_stats["value_loss"] = obj_critic.item()
             training_stats["entropy"] = obj_entropy.item() # add entropy and advantage
+            self.updated_times += 1
 
             #TODO: Find a better way to store
             #self._write_summary(update_i, training_stats, 0)

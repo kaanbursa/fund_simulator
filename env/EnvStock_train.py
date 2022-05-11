@@ -16,7 +16,7 @@ class StockEnvTrain(BaseTradeEnv):
     metadata = {"render.modes": ["human"]}
 
     def __init__(self,  df, index_df, stock_dim, config, flag_days=None, time_window=0, day=0):
-        BaseTradeEnv.__init__(self, stock_dim=stock_dim, index_df=index_df, time_window=time_window)
+        BaseTradeEnv.__init__(self, stock_dim=stock_dim, index_df=index_df, time_window=time_window, config=config)
         # super(StockEnvTrain, self).__init__()
         # money = 10 , scope = 1
         assert time_window < len(df.index.unique()), 'Time window should not be longer that given dataframe'

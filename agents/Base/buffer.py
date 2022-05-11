@@ -339,9 +339,13 @@ class BinarySearchTree:
 
 
 class RecurrentBuffer:
-    """The buffer stores and prepares the training data. It supports recurrent policies. """
+    """
+    Replay buffer for agent with LSTM network additionally using previous action, can be used
+    if the hidden states are not stored (arbitrary initialization of lstm for training).
+    And each sample contains the whole episode instead of a single step.
+    """
 
-    def __init__(self, config: dict, observation_space: gym.spaces.Box, device: torch.device) -> None:
+    def __init__(self, capacity) -> None:
         """
         Args:
             config {dict} -- Configuration and hyperparameters of the environment, trainer and model.
@@ -349,42 +353,24 @@ class RecurrentBuffer:
             device {torch.device} -- The device that will be used for training
         """
         # Setup members
-        self.device = device
-        self.n_workers = config["n_workers"]
-        self.worker_steps = config["worker_steps"]
-        self.n_mini_batches = config["n_mini_batch"]
-        self.batch_size = self.n_workers * self.worker_steps
-        self.mini_batch_size = self.batch_size // self.n_mini_batches
-        hidden_state_size = config["hidden_state_size"]
-        self.layer_type = config["layer_type"]
-        self.sequence_length = config["sequence_length"]
-        self.true_sequence_length = 0
-
-        # Initialize the buffer's data storage
-        self.rewards = np.zeros((self.n_workers, self.worker_steps), dtype=np.float32)
-        self.actions = torch.zeros((self.n_workers, self.worker_steps), dtype=torch.long)
-        self.dones = np.zeros((self.n_workers, self.worker_steps), dtype=np.bool)
-        self.obs = torch.zeros((self.n_workers, self.worker_steps) + observation_space.shape)
-        self.hxs = torch.zeros((self.n_workers, self.worker_steps, hidden_state_size))
-        self.cxs = torch.zeros((self.n_workers, self.worker_steps, hidden_state_size))
-        self.log_probs = torch.zeros((self.n_workers, self.worker_steps))
-        self.values = torch.zeros((self.n_workers, self.worker_steps))
-        self.advantages = torch.zeros((self.n_workers, self.worker_steps))
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
 
     def extend_buffer(self, traj) -> None:
-        states, (ten_hidden_states, rewards, dones, ten_actions, values) = traj[0], traj[1]
-        if self.n_workers == 1:
-            self.rewards[:] = rewards # rewards
-            self.actions[:] = ten_actions
-            self.obs[:] = states # environment state
-            self.hxs[:] = ten_hidden_states # hidden state of the recurrent network
-            self.dones[:] = torch.tensor(dones) # terminal states
-            self.log_probs = ten_actions # Log probabilit yof actions / maybe calculate inside agent class
-            self.values = values # Critic values
-            self.advantages = ''
+        (ten_state, ten_hidden_state, ten_cell_state, ten_reward, ten_mask, ten_action, ten_noise, ten_values) = traj[0]
+        #if self.n_workers == 1:
+        self.rewards[:] = ten_reward # rewards
+        self.actions[:] = ten_action
+        self.obs[:] = ten_state # environment state
+        self.hxs[:] = ten_hidden_state # hidden state of the recurrent network
+        self.cxs[:] = ten_cell_state
+        #self.dones[:] = torch.tensor(dones) # terminal states
+        self.log_probs[:] = ten_noise # Log probabilit yof actions / maybe calculate inside agent class
+        self.values[:] = ten_values # Critic values
+        self.masks[:] = ten_mask
 
-        else:
-            raise NotImplementedError
+
 
 
     def prepare_batch_dict(self, samples) -> None:

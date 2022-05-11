@@ -27,6 +27,7 @@ day_trade_indicators = [
     "boll_lb",
     "volume_delta",
     "volume",
+
 ]
 
 indicator_list = [
@@ -53,3 +54,5 @@ indicator_list = [
     "volume",
     #TODO: Add ROA, ROI, ROE, PE, PB
 ]
+
+

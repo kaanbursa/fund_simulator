@@ -3,6 +3,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.distributions import Categorical
+
+from agents.Base.config import recurrent_config
+
 '''Q Network'''
 
 
@@ -422,16 +425,18 @@ class ActorRecurrentPPO(nn.Module):
     :param action_dim[int]: the dimension of action (the number of discrete action)
     """
 
-    def __init__(self, mid_dim, state_dim, action_dim):
+    def __init__(self, mid_dim,  state_dim, action_dim):
         super().__init__()
         if isinstance(state_dim, int):
             nn_middle = nn.Sequential(nn.Linear(state_dim, mid_dim), nn.ReLU(),
                                       nn.Linear(mid_dim, mid_dim), nn.ReLU(), )
         else:
             nn_middle = Conv2dNet(inp_dim=state_dim[2], out_dim=mid_dim, image_size=state_dim[0])
-
-        self.net = nn.Sequential(nn_middle,
-                                 nn.Linear(mid_dim, mid_dim), nn.Hardswish(),
+        self.hidden_state_size = mid_dim
+        self.sequence_length = recurrent_config['sequence_length']
+        self.num_seq = 1 if not recurrent_config['bidirectional'] else 2
+        self.rnn = RNNLSTMLayer(inputs_dim=state_dim, outputs_dim=mid_dim,config=recurrent_config)
+        self.net = nn.Sequential(nn.Linear(mid_dim, mid_dim), nn.Hardswish(),
                                  nn.Linear(mid_dim, action_dim), )
         layer_norm(self.net[-1], std=0.1)  # output layer for action
 
@@ -439,34 +444,40 @@ class ActorRecurrentPPO(nn.Module):
         self.a_std_log = nn.Parameter(torch.zeros((1, action_dim)) - 0.5, requires_grad=True)
         self.sqrt_2pi_log = np.log(np.sqrt(2 * np.pi))
 
-    def forward(self, state):
+    def forward(self, state, rec_cel, sequence_length):
         """
         The forward function.
         :param state[np.array]: the input state.
+        :param reccurent hidden state and cell state
+        :param sequence_length[int] sequence length is 1 for sampling
         :return: the output tensor.
         """
-        return self.net(state).tanh()  # action.tanh()
 
-    def get_action(self, state):
+        state, (hxs, cxs) = self.rnn(state, rec_cel, sequence_length)
+        return self.net(state).tanh(), (hxs, cxs)  # action.tanh()
+
+    def get_action(self, state, rec_cel, sequence_length):
         """
         The forward function with Gaussian noise.
         :param state[np.array]: the input state.
         :return: the action and added noise.
         """
+        state, (hxs, cxs) = self.rnn(state, rec_cel, sequence_length)
         a_avg = self.net(state)
         a_std = self.a_std_log.exp()
 
         noise = torch.randn_like(a_avg)
         action = a_avg + noise * a_std
-        return action, noise
+        return action, (hxs, cxs),  noise
 
-    def get_logprob_entropy(self, state, action):
+    def get_logprob_entropy(self, state, rec_cel, action, sequence_length):
         """
         Compute the log of probability with current network.
         :param state[np.array]: the input state.
         :param action[float]: the action.
         :return: the log of probability and entropy.
         """
+        state, hxs = self.rnn(state, rec_cel, sequence_length)
         a_avg = self.net(state)
         a_std = self.a_std_log.exp()
 
@@ -474,7 +485,7 @@ class ActorRecurrentPPO(nn.Module):
         logprob = -(self.a_std_log + self.sqrt_2pi_log + delta).sum(1)  # new_logprob
 
         dist_entropy = (logprob.exp() * logprob).mean()  # policy entropy
-        return logprob, dist_entropy
+        return logprob, dist_entropy, hxs
 
     def get_old_logprob(self, _action, noise):  # noise = action - a_noise
         """
@@ -485,6 +496,19 @@ class ActorRecurrentPPO(nn.Module):
         """
         delta = noise.pow(2) * 0.5
         return -(self.a_std_log + self.sqrt_2pi_log + delta).sum(1)  # old_logprob
+
+    def init_recurent_cell_states(self, num_sequences:int, device:torch.device) -> tuple:
+        """
+        Inıtıailizes the recurennt cell states(hxs, csx) as zeros
+        :param num_sequences:
+        :return:
+        """
+        hxs = torch.zeros((num_sequences), self.hidden_state_size, dtype=torch.float32, device=device).unsqueeze(0)
+        cxs = torch.zeros((num_sequences), self.hidden_state_size, dtype=torch.float32, device=device).unsqueeze(0) # None since cell state will be used later add todo
+
+        return hxs, cxs
+
+
 
 
 '''Value Network (Critic)'''
@@ -605,26 +629,36 @@ class CriticRecurrentPPO(nn.Module):
     :param action_dim[int]: the dimension of action (the number of discrete action)
     """
 
-    def __init__(self, mid_dim, state_dim, _action_dim):
+    def __init__(self, mid_dim,  state_dim, _action_dim):
         super().__init__()
         if isinstance(state_dim, int):
             nn_middle = nn.Sequential(nn.Linear(state_dim, mid_dim), nn.ReLU(), )
         else:
             nn_middle = Conv2dNet(inp_dim=state_dim[2], out_dim=mid_dim, image_size=state_dim[0])
 
-        self.net = nn.Sequential(nn_middle,
-                                 nn.Linear(mid_dim, mid_dim), nn.ReLU(),
-                                 nn.Linear(mid_dim, mid_dim), nn.Hardswish(),
+        self.hidden_state_size = mid_dim
+        self.sequence_length = recurrent_config['sequence_length']
+        self.rnn = RNNLSTMLayer(inputs_dim=state_dim, outputs_dim=mid_dim, config=recurrent_config)
+        self.net = nn.Sequential(nn.Linear(mid_dim, mid_dim), nn.ReLU(),
                                  nn.Linear(mid_dim, 1), )
         layer_norm(self.net[-1], std=0.5)  # output layer for advantage value
 
-    def forward(self, state):
+    def forward(self, state, hxs, sequence_length):
         """
         The forward function to ouput the value of the state.
         :param state[np.array]: the input state.
         :return: the output tensor.
         """
-        return self.net(state)  # advantage value
+        state, hxs = self.rnn(state, hxs, sequence_length= sequence_length)
+        return self.net(state), hxs  # advantage value
+
+    def init_recurent_cell_states(self, num_sequences:int, device:torch.device) -> tuple:
+        """Inıtializes the recurrent cell states"""
+
+        hxs = torch.zeros((num_sequences), self.hidden_state_size, dtype=torch.float32, device=device).unsqueeze(0)
+        cxs = torch.zeros((num_sequences), self.hidden_state_size, dtype=torch.float32, device=device).unsqueeze(0)
+
+        return hxs, cxs
 
 
 class CriticAdvTwin(nn.Module):
@@ -879,8 +913,8 @@ class ShareRecurrentPPO(nn.Module):
 
         self.config = config
         if isinstance(state_dim, int):
-            # Shared rec layer
-            self.recurrent_layer = RNNLayer(inputs_dim=state_dim, outputs_dim=hidden_dim, recurrent_N=config['recurrent_n_layer'] , use_orthogonal=config['use_orthogonal'])
+            # Shared embedded rec layer
+            self.recurrent_layer = RNNLSTMLayer(inputs_dim=state_dim, outputs_dim=hidden_dim, config=recurrent_config)
 
         else:
             self.enc_s = Conv2dNet(inp_dim=state_dim[2], out_dim=hidden_dim, image_size=state_dim[0])
@@ -901,24 +935,17 @@ class ShareRecurrentPPO(nn.Module):
 
         self.value = nn.Linear(fc_mid_dim, 1)
         nn.init.orthogonal_(self.value.weight, 1)
+
+        # TODO: Add auxiliary output
+        #self.auxiliary = nn.Linear(fc_mid_dim, action_dim)
+        #nn.init.orthogonal_(self.value.weight, 1)
         #layer_norm(self.dec_a[-1], std=0.01)
 
         #self.sqrt_2pi_log = np.log(np.sqrt(2 * np.pi))
 
     def forward(self, s, rec_cell, seq_len):
 
-        if seq_len == 1:
-            s, rec_cell = self.recurrent_layer(s.unsqueeze(1), rec_cell)
-            s = s.squeeze(1)
-        else:
-            s_shape = tuple(s.size())
-            s = s.reshape((s_shape[0] // seq_len), seq_len, s_shape[1])
-
-            s, rec_cell = self.recurrent_layer(s.unsqueeze(1), rec_cell)
-
-            s_shape = tuple(s.size())
-            s = s.reshape(s_shape[0] * s_shape[1], s_shape[2])
-
+        s, hidden = self.recurrent_layer(s, rec_cell, seq_len)
         s = F.relu(self.lin_hidden(s))
 
         s_policy = F.relu(self.lin_policy(s))
@@ -932,13 +959,13 @@ class ShareRecurrentPPO(nn.Module):
 
         return pi, value, rec_cell, a_noise
 
-    def init_recurent_cell_states(self, num_sequences:int, device:torch.device) -> tuple:
+    def init_recurent_cell_states(self, num_sequences:int, device:torch.device) : #-> tuple[torch.Tensor, torch.Tensor]
         """Inıtializes the recurrent cell states"""
 
         hxs = torch.zeros((num_sequences), self.recurrent_layer, dtype=torch.float32, device=device)
-        cxs = None # None since cell state will be used later add todo
+        cxs = torch.zeros((num_sequences), self.recurrent_layer, dtype=torch.float32, device=device)
 
-        return hxs
+        return (hxs, cxs)
 
     def get_action_noise(self, state):
         s_ = self.enc_s(state)
@@ -1092,13 +1119,80 @@ class Conv2dNet(nn.Module):  # pixel-level state encoder
     #     print(y.shape)
 
 
+class RNNLSTMLayer(nn.Module):
+    def __init__(self, inputs_dim, outputs_dim, config):
+        super(RNNLSTMLayer, self).__init__()
+        recurrent_N = config['recurrent_n_layer']
+
+        self.recurrent_layer = nn.LSTM(inputs_dim, outputs_dim, num_layers=recurrent_N,
+                                       batch_first=True)
+
+        self.norm = nn.LayerNorm(outputs_dim)
+        # Init recurrent layer
+        #TODO: use orthogonal?
+        for name, param in self.recurrent_layer.named_parameters():
+            if "bias" in name:
+                nn.init.constant_(param, 0)
+            elif "weight" in name:
+                nn.init.orthogonal_(param, np.sqrt(2))
+
+    def forward(self, obs: torch.tensor, recurrent_cell: torch.tensor, sequence_length: int = 1):
+        """Forward pass of the model
+        Args:
+            obs {torch.tensor} -- Batch of observations
+            recurrent_cell tuple{torch.tensor, torch.tensor} -- Memory cell of the recurrent layer
+            device {torch.device} -- Current device
+            sequence_length {int} -- Length of the fed sequences. Defaults to 1.
+        Returns:
+            {Categorical} -- Policy: Categorical distribution
+
+            {tuple} -- Recurrent cell
+        """
+        # Set observation as input to the model
+        h = obs
+        # Forward observation encoder
+
+
+
+        # Forward reccurent layer (GRU or LSTM)
+        if sequence_length == 1:
+            # Case: sampling training data or model optimization using sequence length == 1
+
+            h, recurrent_cell = self.recurrent_layer(h.unsqueeze(1), recurrent_cell)
+            h = h.squeeze(1)  # Remove sequence length dimension
+
+        else:
+            # Case: Model optimization given a sequence length > 1
+            # Reshape the to be fed data to batch_size, sequence_length, data
+            h_shape = tuple(h.size())
+
+
+            h = h.reshape((h_shape[0] // sequence_length), sequence_length, h_shape[1])
+
+            # Forward recurrent layer
+
+
+            h, recurrent_cell = self.recurrent_layer(h, recurrent_cell)
+
+            # Reshape to the original tensor size
+            h_shape = tuple(h.size())
+            h = h.reshape(h_shape[0] * h_shape[1], h_shape[2])
+
+        # The output of the recurrent layer is not activated as it already utilizes its own activations.
+        h = self.norm(h)
+        return h, recurrent_cell
+
+
 class RNNLayer(nn.Module):
-    def __init__(self, inputs_dim, outputs_dim, recurrent_N, use_orthogonal):
+    def __init__(self, inputs_dim, outputs_dim, recurrent_N, use_orthogonal, layer_type='lstm'):
         super(RNNLayer, self).__init__()
         self._recurrent_N = recurrent_N
         self._use_orthogonal = use_orthogonal
-
-        self.rnn = nn.GRU(inputs_dim, outputs_dim, num_layers=self._recurrent_N)
+        self.layer_type = layer_type
+        if self.layer_type == 'lstm':
+            self.rnn = nn.LSTM(inputs_dim, outputs_dim, num_layers=self._recurrent_N, bidirectional=False)
+        else:
+            self.rnn = nn.GRU(inputs_dim, outputs_dim, num_layers=self._recurrent_N)
         for name, param in self.rnn.named_parameters():
             if 'bias' in name:
                 nn.init.constant_(param, 0)
@@ -1111,10 +1205,18 @@ class RNNLayer(nn.Module):
 
     def forward(self, x, hxs, masks):
         if x.size(0) == hxs.size(0):
-            x, hxs = self.rnn(x.unsqueeze(0),
-                              (hxs * masks.repeat(1, self._recurrent_N).unsqueeze(-1)).transpose(0, 1).contiguous())
-            x = x.squeeze(0)
-            hxs = hxs.transpose(0, 1)
+            if self.layer_type == 'lstm':
+                x, (hxs, cxs) = self.rnn(x.unsqueeze(0),
+                                  (hxs * masks.repeat(1, self._recurrent_N).unsqueeze(-1)).transpose(0, 1).contiguous())
+                x = x.squeeze(0)
+                hxs = hxs.transpose(0, 1)
+                cxs = cxs.transpose(0,1)
+
+            else:
+                x, hxs = self.rnn(x.unsqueeze(0),
+                                  (hxs * masks.repeat(1, self._recurrent_N).unsqueeze(-1)).transpose(0, 1).contiguous())
+                x = x.squeeze(0)
+                hxs = hxs.transpose(0, 1)
         else:
             # x is a (T, N, -1) tensor that has been flatten to (T * N, -1)
             N = hxs.size(0)

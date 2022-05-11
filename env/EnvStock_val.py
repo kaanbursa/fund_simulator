@@ -34,7 +34,7 @@ class StockEnvValidation(BaseTradeEnv):
         turbulence_threshold=140,
         iteration="",
     ):
-        BaseTradeEnv.__init__(self,  stock_dim=stock_dim, index_df=index_df, time_window=time_window)
+        BaseTradeEnv.__init__(self,  stock_dim=stock_dim, index_df=index_df, time_window=time_window, config=config)
         # money = 10 , scope = 1
         assert time_window < len(df.index.unique()), 'Time window should not be longer that given dataframe'
         self.day = day + time_window

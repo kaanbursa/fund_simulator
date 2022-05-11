@@ -114,3 +114,13 @@ def get_buy_and_hold(path, start_test, end_test):
     snpthirty['Date'] = pd.to_datetime(snpthirty['Date'])
     snpthirty = snpthirty[(snpthirty['Date'] > start_test) & (snpthirty['Date'] < end_test)]
     return snpthirty
+
+
+def get_index_prices(index_list, start, end):
+    """
+    Get index prices, the environment will pick prices available atgiven day
+    :param index_list:
+    :param start:
+    :param end:
+    :return:
+    """

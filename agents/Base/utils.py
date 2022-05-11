@@ -26,3 +26,19 @@ class OrnsteinUhlenbeckNoise:  # NOT suggest to use it
         noise = self.sigma * np.sqrt(self.dt) * rd.normal(size=self.size)
         self.ou_noise -= self.theta * self.ou_noise * self.dt + noise
         return self.ou_noise
+
+
+def polynomial_decay(initial: float, final: float, max_episode:int, power:int, cur_episode:int):
+    """
+    Decays the given hparams polynomially, if power is set to one than the decay is linear
+    :param initial:
+    :param final:
+    :param max_episode:
+    :param power:
+    :param cur_episode:
+    :return: (float) decayed parameter
+    """
+    if cur_episode >= max_episode or initial == final:
+        return final
+    else:
+        return ((initial - final) * ((1 - cur_episode / max_episode) ** power) + final)

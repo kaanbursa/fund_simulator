@@ -29,7 +29,7 @@ class Evaluator:
               f"{'avgR':>8}{'stdR':>7}{'avgS':>7}{'stdS':>6} |"
               f"{'expR':>8}{'objC':>7}{'etc.':>7}")
 
-    def evaluate_and_save(self, act, steps, r_exp, log_tuple) -> (bool, bool):  # 2021-09-09
+    def evaluate_and_save(self, act, steps, r_exp, log_tuple, recurrent=False) -> (bool, bool):  # 2021-09-09
 
         self.total_step += steps  # update total training steps
 
@@ -40,17 +40,31 @@ class Evaluator:
         else:"""
         self.eval_time = time.time()
 
-        '''evaluate first time'''
-        rewards_steps_list = [get_episode_return_and_step(self.eval_env, act)
-                              for _ in range(self.eval_times1)]
-        r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
-
-        '''evaluate second time'''
-        if r_avg > self.r_max:  # evaluate actor twice to save CPU Usage and keep precision
-            rewards_steps_list += [get_episode_return_and_step(self.eval_env, act)
-                                   for _ in range(self.eval_times2 - self.eval_times1)]
+        if not recurrent:
+            '''evaluate first time'''
+            rewards_steps_list = [get_episode_return_and_step(self.eval_env, act)
+                                  for _ in range(self.eval_times1)]
             r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
 
+            '''evaluate second time'''
+            if r_avg > self.r_max:  # evaluate actor twice to save CPU Usage and keep precision
+                rewards_steps_list += [get_episode_return_and_step(self.eval_env, act)
+                                       for _ in range(self.eval_times2 - self.eval_times1)]
+                r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
+        else:
+            get_episode_return_and_step_recurrent
+            '''evaluate first time'''
+            rewards_steps_list = [get_episode_return_and_step_recurrent(self.eval_env, act)
+                                  for _ in range(self.eval_times1)]
+            r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
+
+            '''evaluate second time'''
+            if r_avg > self.r_max:  # evaluate actor twice to save CPU Usage and keep precision
+                rewards_steps_list += [get_episode_return_and_step_recurrent(self.eval_env, act)
+                                       for _ in range(self.eval_times2 - self.eval_times1)]
+
+
+                r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
         '''save the policy network'''
         if_save = r_avg > self.r_max
         if if_save:  # save checkpoint with highest episode return
@@ -151,6 +165,7 @@ def get_episode_return_and_step(env, act) -> (float, int):
 
     max_step = env.max_step
     if_discrete = env.if_discrete
+
     if if_discrete:
         def get_action(_state):
             _state = torch.as_tensor(_state, dtype=torch.float32, device=device)
@@ -166,6 +181,43 @@ def get_episode_return_and_step(env, act) -> (float, int):
     state = env.reset()
     for episode_step in range(max_step):
         action = get_action(state)
+        state, reward, done, _ = env.step(action)
+        episode_return += reward
+
+        if done:
+            break
+    episode_return = getattr(env, 'episode_return', episode_return)
+    return episode_return, episode_step
+
+
+def get_episode_return_and_step_recurrent(env, act) -> (float, int):
+    device_id = next(act.parameters()).get_device()  # net.parameters() is a python generator.
+    device = torch.device('cpu' if device_id == -1 else f'cuda:{device_id}')
+
+    episode_step = 1
+    episode_return = 0.0  # sum of rewards in an episode
+
+    max_step = env.max_step
+    if_discrete = env.if_discrete
+
+    if if_discrete:
+        def get_action(_state, hidden_state):
+            _state = torch.as_tensor(_state, dtype=torch.float32, device=device)
+            _action, hidden_state = act(_state.unsqueeze(0), hidden_state, sequence_length=1)
+            _action = _action.argmax(dim=1)[0]
+            return _action.detach().cpu().numpy(), hidden_state
+    else:
+        #TODO: CHECK if you have non discrete
+        def get_action(_state, hidden_state):
+            _state = torch.as_tensor(_state, dtype=torch.float32, device=device)
+            _action, hidden_state = act(_state.unsqueeze(0), hidden_state, sequence_length=1)
+            return _action.detach().cpu().numpy()[0], hidden_state
+
+    state = env.reset()
+    hidden_state = act.init_recurent_cell_states(1, device=device)
+    for episode_step in range(max_step):
+        action, hidden_state = get_action(state, hidden_state)
+
         state, reward, done, _ = env.step(action)
         episode_return += reward
 

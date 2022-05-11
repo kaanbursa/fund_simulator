@@ -35,7 +35,7 @@ class StockEnvTrade(BaseTradeEnv):
         iteration="",
             debug=False
     ):
-        BaseTradeEnv.__init__(self, stock_dim=stock_dim, index_df=index_df, time_window=time_window )
+        BaseTradeEnv.__init__(self, stock_dim=stock_dim, index_df=index_df, time_window=time_window, config=config )
         # money = 10 , scope = 1
         assert time_window < len(df.index.unique()), 'Time window should not be longer that given dataframe'
         self.date = unique_trade_date[day]

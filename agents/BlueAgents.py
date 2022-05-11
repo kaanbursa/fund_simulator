@@ -84,7 +84,7 @@ class DRLAgent:
         self.data = data
         self.end_date = train_config.end_date
         self.config = train_config
-        self.env_config = EnvConfig
+        self.env_config = config
         self.unique_trade_date = data[data.Date > self.config.start_trade].Date.unique()
         self.model_name = model_name
         self.population = train_config.population
@@ -133,8 +133,6 @@ class DRLAgent:
         env_train, env_val = self.build_envs(train_data, val_data, i)
         env_train.env_num = 1
 
-
-
         env_val.env_num = 1
 
         model = Arguments(env_train, env_val, self.agent)
@@ -170,6 +168,7 @@ class DRLAgent:
 
         sampler = {
             'PPO':sample_own_ppo_params(hyperparam_names),
+            'RECURRENT_PPO': sample_own_ppo_params(hyperparam_names),
             #'SAC':sample_sac_params(hyperparam_names)
         }
 
@@ -178,6 +177,10 @@ class DRLAgent:
         return new_hparams
 
     def _save_model_info(self, hparams, reward, start, end):
+        if (hparams['learning_rate'], dict):
+            hparams['learning_rate_start'] = hparams['learning_rate']['start']
+            hparams['learning_rate_end'] = hparams['learning_rate']['end']
+            del hparams['learning_rate']
 
         model_info = {
             "model_name": self.model_name,
@@ -270,7 +273,7 @@ class DRLAgent:
                         self.config.rebalance_window,
                 ):
                     print("============================================")
-                    print('Agent: ', j)
+                    print('Agent: ', j, '/', self.population)
 
 
                     ## initial state is empty
@@ -338,7 +341,8 @@ class DRLAgent:
                     ############## Training and Validation ends ##############
 
                     ############## Trading starts ##############
-
+                    if hasattr(model_ensemble, 'updated_times'):
+                        print('Model updated: ', model_ensemble.updated_times, ' times')
                     print(
                         "======Trading from: ",
                         self.unique_trade_date[i - self.config.rebalance_window],
@@ -387,7 +391,7 @@ class DRLAgent:
                         # If it has traded for more than half of the trading periods and still not passed buy and hold next hparams
 
                         bnh = self.calculate_buy_and_hold(iter=i)
-                        if bnh > end_total_asset:
+                        if (bnh * 0.99) > end_total_asset:
                             print('Buy and hold bigger than performances')
                             break
                     check_for_progress += 1
@@ -399,9 +403,6 @@ class DRLAgent:
                 print('Error: ', e)
 
                 self.config.hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
-
-
-
 
             # TO SUMMARY WRITER LIST OF THINGS TO ADD
             # MODEL VERSIONING (HParams)
@@ -443,7 +444,7 @@ class DRLAgent:
 
         pct_changes = (dates_prices - first_prices) / first_prices
         portfolio_value = sum(balances + (balances * pct_changes))
-        print('Buy and hold value is ', portfolio_value)
+        print('Buy and Hold value is ', portfolio_value)
         return portfolio_value
 
     def run_prediction(self, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
@@ -451,6 +452,7 @@ class DRLAgent:
         self.last_state = []
         self._increament_run_id()
         self.trade_all_assets = [self.env_config.INITIAL_ACCOUNT_BALANCE]
+
         for i in range(
                 self.config.rebalance_window + self.config.validation_window + time_frame,
                 len(self.unique_trade_date),
@@ -597,6 +599,7 @@ class DRLAgent:
                 net_dimension=net_dimension
             )
             self.trade_all_assets.extend(episode_assets)
+            bnh = self.calculate_buy_and_hold(iter=i)
 
             self.summary_write(episode_assets[-1], all_assets_period=episode_assets)
 
@@ -652,32 +655,57 @@ class DRLAgent:
         episode_total_assets.append(env_trade.initial_total_asset)
         last_state = []
         done = False
-        with _torch.no_grad():
-            while not done:
-                s_tensor = _torch.as_tensor((state,), device=device).float()
+        if agent.is_recurrent:
+            hidden_state = act.init_recurent_cell_states(1, device=device)
+            with _torch.no_grad():
+                while not done:
+                    s_tensor = _torch.as_tensor((state,), device=device).float()
 
-                a_tensor = act(s_tensor)  # action_tanh = act.forward()
+                    a_tensor, hidden_state = act(s_tensor, hidden_state,
+                                                 sequence_length=1)  # action_tanh = act.forward()
 
-                action = (
-                    a_tensor.detach().cpu().numpy()[0]
-                )  # not need detach(), because with torch.no_grad() outside
+                    action = (
+                        a_tensor.detach().cpu().numpy()[0]
+                    )  # not need detach(), because with torch.no_grad() outside
 
-                state, reward, done, _ = env_trade.step(action)
+                    state, reward, done, _ = env_trade.step(action)
 
-                total_asset = env_trade.total_asset
+                    total_asset = env_trade.total_asset
 
-                episode_total_assets.append(total_asset)
-                episode_return = total_asset / env_trade.initial_total_asset
-                episode_returns.append(episode_return)
-                if done:
+                    episode_total_assets.append(total_asset)
+                    episode_return = total_asset / env_trade.initial_total_asset
+                    episode_returns.append(episode_return)
+                    if done:
+                        last_state, _ = env_trade.render()
+                        break
+        else:
+            with _torch.no_grad():
+                while not done:
+                    s_tensor = _torch.as_tensor((state,), device=device).float()
 
-                    last_state, _ = env_trade.render()
-                    break
+                    a_tensor = act(s_tensor)  # action_tanh = act.forward()
+
+                    action = (
+                        a_tensor.detach().cpu().numpy()[0]
+                    )  # not need detach(), because with torch.no_grad() outside
+
+                    state, reward, done, _ = env_trade.step(action)
+
+                    total_asset = env_trade.total_asset
+
+                    episode_total_assets.append(total_asset)
+                    episode_return = total_asset / env_trade.initial_total_asset
+                    episode_returns.append(episode_return)
+                    if done:
+
+                        last_state, _ = env_trade.render()
+                        break
         print("Test Finished!")
         # return episode total_assets on testing data
         print("episode_return %", round(episode_return, 4) - 1)
 
         return episode_total_assets, last_state
+
 
 
 
