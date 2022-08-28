@@ -25,7 +25,8 @@ class AgentRecurrentPPO(AgentBase):
         :param agent_id[int]: if the visible_gpu is '1,9,3,4', agent_id=1 means (1,9,4,3)[agent_id] == 9
         """
 
-    def __init__(self, _net_dim=256, hidden_dim=126, _state_dim=8, _action_dim=2, sequence_length=16,
+    def __init__(self, _net_dim=256, hidden_dim=126, _state_dim=8, _action_dim=2,
+                 sequence_length=16,
                  _learning_rate=1e-4,
                  _if_per_or_gae=False, _gpu_id=0, ):
 
@@ -52,7 +53,8 @@ class AgentRecurrentPPO(AgentBase):
              learning_rate=1e-4, if_per_or_gae=False, env_num=1, gpu_id=0):
         AgentBase.init(self, net_dim, state_dim, action_dim, learning_rate, if_per_or_gae, env_num, gpu_id)
 
-
+        self.ten_hidden_state = self.act.init_recurent_cell_states(1, device=self.device)
+        self.ten_hidden_state_critic = self.cri_target.init_recurent_cell_states(1, device=self.device)
 
         self.traj_list = [list() for _ in range(env_num)]
         self.env_num = env_num
@@ -65,7 +67,6 @@ class AgentRecurrentPPO(AgentBase):
             self.explore_env = self.explore_one_env
         else:
             self.explore_env = self.explore_vec_env
-
 
 
     def optim_update(self, optimizer, objective, params):
@@ -120,10 +121,9 @@ class AgentRecurrentPPO(AgentBase):
         state = self.states[0]
         #Zero initilization for hiden state staleness problem
         sequence_length = 1
-        ten_hidden_state = self.act.init_recurent_cell_states(sequence_length, device=self.device)
-        ten_hidden_state_critic = self.cri_target.init_recurent_cell_states(sequence_length, device=self.device)
-        #first hidden state 1,1,1026
-
+        ten_hidden_state = self.ten_hidden_state
+        ten_hidden_state_critic = self.ten_hidden_state_critic
+        #first hidden state 1,1,102
         last_done = 0
         traj = list()
         step = 0
@@ -131,6 +131,7 @@ class AgentRecurrentPPO(AgentBase):
         while step < target_step:
 
             ten_states = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+
             # hidden states is hidden statae + cell state
             ten_hidden_states = torch.as_tensor(ten_hidden_state[0], dtype=torch.float32) # unsqueezed on initialization
             ten_cell_states = torch.as_tensor(ten_hidden_state[1], dtype=torch.float32)
@@ -236,6 +237,7 @@ class AgentRecurrentPPO(AgentBase):
             #buf_cri_hidden = (buf_cri_hidden[0].unsqueeze(0), buf_cri_hidden[1].unsqueeze(0))
             #(buf_value, buf_cri_hidden) = [self.cri_target(buf_state[i:i + bs],buf_cri_hidden, sequence_length=1) for i in range(0, buf_len, bs)]
             #buf_value = torch.cat(buf_value, dim=0)
+
             buf_logprob = self.act.get_old_logprob(buf_action, buf_noise)
 
             buf_r_sum, buf_adv_v = self.get_reward_sum(buf_len, buf_reward, buf_mask, buf_value)  # detach()
@@ -250,7 +252,6 @@ class AgentRecurrentPPO(AgentBase):
         update_times = int(buf_len / batch_size * repeat_times)
         # train in minibatches
         # TODO: Convert samples from buffer to sequential
-
 
         samples = {
             "actions": buf_action,
@@ -283,7 +284,7 @@ class AgentRecurrentPPO(AgentBase):
 
                 r_sum = mini_batch['r_sum']
                 adv_v = mini_batch['advantages']
-                action =mini_batch['actions']
+                action = mini_batch['actions']
                 logprob = mini_batch['log_probs']
                 #masks = mini_batch['loss_mask']
                 hidden_state = mini_batch['hxs'].unsqueeze(0).float() # always get the first
@@ -323,7 +324,7 @@ class AgentRecurrentPPO(AgentBase):
                                  soft_update_tau) if self.cri_target is not self.cri else None
 
         a_std_log = getattr(self.act, 'a_std_log', torch.zeros(1)).mean()
-        return obj_critic.item(), obj_actor.item(), a_std_log.item()  # logging_tuple
+        return {'actor_loss':obj_critic.item(), 'actor_loss':obj_actor.item(), 'action_std_log':a_std_log.item() } # logging_tuple
 
     def _masked_mean(self, tensor:torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
@@ -432,6 +433,7 @@ class AgentRecurrentPPO(AgentBase):
 
 
 
+
             traj[:] = (ten_state, ten_hidden_state, ten_cell_state, ten_reward, ten_mask, ten_action, ten_noise, ten_values, ten_cri_hidden, ten_cri_cell)
 
         return traj_list
@@ -482,6 +484,7 @@ class AgentRecurrentPPO(AgentBase):
 
             if (key == "hxs" or key == "cxs") or (key == "cri_hidden" or key == "cri_cell"):
                 # Select only the very first recurrent cell state of a sequence and add it to the samples.
+
                 samples[key] = samples[key].double()
 
 
@@ -545,7 +548,7 @@ class AgentRecurrentPPO(AgentBase):
             yield mini_batch
 
 
-class AgentSharedRecurrentPPO:
+class AgentSharedRecurrentPPO(AgentBase):
     """
 
         Recurrent PPO algorithm. “Proximal Policy Optimization Algorithms”. John Schulman. et al.. 2017.
@@ -559,11 +562,17 @@ class AgentSharedRecurrentPPO:
         :param agent_id[int]: if the visible_gpu is '1,9,3,4', agent_id=1 means (1,9,4,3)[agent_id] == 9
         """
 
-    def __init__(self, config, _net_dim=256, hidden_dim=126, _state_dim=8, _action_dim=2, sequence_length=16,
+    def __init__(self,
+                 _net_dim=256, hidden_dim=126, _state_dim=8, _action_dim=2, sequence_length=16,
                  _learning_rate=1e-4,
                  _if_per_or_gae=False, _gpu_id=0, ):
 
-        self.network = ShareRecurrentPPO(_state_dim, _action_dim, hidden_dim, _net_dim, config)
+        AgentBase.__init__(self)
+
+        self.ClassCri = None
+        self.ClassAct = None
+
+        self.sequence_length = config['sequence_length']
 
         self.states = None
         self.device = None
@@ -583,12 +592,13 @@ class AgentSharedRecurrentPPO:
         '''attribute'''
         self.explore_env = None
         self.get_obj_critic = None
-        losses = {'SmoothL1Loss':torch.nn.SmoothL1Loss}
-        self.criterion = losses[config['criterion']]
+        #losses = {'SmoothL1Loss':torch.nn.SmoothL1Loss}
+
 
 
         self.is_recurrent = True
         self.seq_len = sequence_length
+
 
         self.if_off_policy = False
         self.ratio_clip = 0.2  # could be 0.00 ~ 0.50 ratio.clamp(1 - clip, 1 + clip)
@@ -609,6 +619,26 @@ class AgentSharedRecurrentPPO:
         self.explore_env = self.explore_one_env
 
 
+    def init(self, net_dim=256, state_dim=8, action_dim=2,
+             learning_rate=1e-4, if_per_or_gae=False, env_num=1, gpu_id=0):
+        self.ClassCri = ShareRecurrentPPO
+
+        AgentBase.init(self, net_dim, state_dim, action_dim, learning_rate, if_per_or_gae, env_num, gpu_id)
+        # TODO: from config get if zero initialization state
+        self.hidden_state_in = self.cri.init_recurent_cell_states(num_sequences=1, device=self.device)
+
+        self.traj_list = [list() for _ in range(env_num)]
+        self.env_num = env_num
+
+        if if_per_or_gae:  # if_use_gae
+            self.get_reward_sum = self.get_reward_sum_gae
+        else:
+            self.get_reward_sum = self.get_reward_sum_raw
+        if env_num == 1:
+            self.explore_env = self.explore_one_env
+        else:
+            self.explore_env = self.explore_vec_env
+
 
     def optim_update(self, optimizer, objective, params):
         optimizer.zero_grad()
@@ -627,10 +657,10 @@ class AgentSharedRecurrentPPO:
         s_tensor = torch.as_tensor(state[np.newaxis], device=self.device)
         h_tensor = torch.as_tensor(hidden_state[np.newaxis], device=self.device)
 
-        a_tensor, value_tensor, hidden_state, action_noise = self.network(s_tensor, h_tensor)
-        action = a_tensor.detach().cpu().numpy()
-        return action, value_tensor, hidden_state, action_noise
 
+        a_tensor, value_tensor, hidden_state = self.cri(s_tensor, h_tensor)
+        action = a_tensor.detach().cpu().numpy()
+        return action, value_tensor, hidden_state
 
 
     def select_actions(self, state: torch.Tensor, hidden_state: torch.Tensor) -> torch.Tensor:
@@ -642,9 +672,11 @@ class AgentSharedRecurrentPPO:
             :return: an array of actions in a shape (batch_size, action_dim, ) where each action is clipped into range(-1, 1).
         """
         state = state.to(self.device)
-        hidden_state = hidden_state.to(self.device)
-        action, value_tensor, hidden_state, a_noise = self.network(state, hidden_state)
-        return action.detach().cpu(), value_tensor.detach().cpu(), hidden_state, a_noise
+        self.sequence_length = 1
+
+        #hidden_state = hidden_state.to(self.device)
+        action, value_tensor, hidden_state = self.cri(state, hidden_state, self.sequence_length)
+        return action.detach().cpu(), value_tensor.detach().cpu(), hidden_state
 
     def explore_one_env(self, env, target_step, reward_scale, gamma):
         """
@@ -657,29 +689,45 @@ class AgentSharedRecurrentPPO:
         :return: a list of trajectories [traj, ...] where each trajectory is a list of transitions [(state, other), ...].
         """
 
-        #TODO: fix recurrent cell storing in buffer
-
         state = self.states[0]
+
         #Zero initilization for hiden state staleness problem
-        hidden_state_in = self.network.init_recurent_cell_states(self.seq_len, device=self.device)
+        hidden_state_in = self.hidden_state_in
 
         last_done = 0
         traj = list()
         step = 0
-        # TODO: this verison calculates log probability when exploring the environment
         while step < target_step:
 
             ten_states = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
-            ten_hidden_states_out = hidden_state_in
 
-            ten_actions, value_tensor, ten_hidden_states_out, noise = self.select_actions(ten_states, ten_hidden_states_out)
-
+            ten_actions, value_tensor, ten_hidden_states_out = self.select_actions(ten_states, hidden_state_in)
+            noise = self.cri.get_action_noise(ten_actions)
             action = ten_actions[0].numpy()
-            log_prob = ten_actions.log_prob(action)
 
+            #log_prob = self.cri.get_logprob_entropy(action, hidden_state_in)
+            #TODO: np.tanh action for production
             next_s, reward, done, _ = env.step(np.tanh(action))
+            ten_hidden_states_out = (torch.as_tensor(ten_hidden_states_out[0],
+                                                dtype=torch.float32).squeeze(0),
+                               torch.as_tensor(ten_hidden_states_out[1],
+                                               dtype=torch.float32).squeeze(0)
+                               )
+            hidden_state_in = (torch.as_tensor(hidden_state_in[0],
+                                                     dtype=torch.float32).squeeze(0),
+                                     torch.as_tensor(hidden_state_in[1],
+                                                     dtype=torch.float32).squeeze(0)
+                                     )
 
-            traj.append((ten_states, hidden_state_in, ten_hidden_states_out, reward, done, ten_actions, log_prob, noise, value_tensor))
+            traj.append((ten_states,
+                         hidden_state_in[0],hidden_state_in[1],
+                         ten_hidden_states_out[0], ten_hidden_states_out[1]
+                         , reward, done, ten_actions, noise, value_tensor))
+            hidden_state_in  = (torch.as_tensor(ten_hidden_states_out[0],
+                                                dtype=torch.float32).unsqueeze(0),
+                               torch.as_tensor(ten_hidden_states_out[1],
+                                               dtype=torch.float32).unsqueeze(0)
+                               )
             if done:
                 state = env.reset()
                 last_done = step
@@ -742,13 +790,14 @@ class AgentSharedRecurrentPPO:
 
         with torch.no_grad():
             # buf_len = buffer[0].shape[0]
-            buf_state, buf_hidden, buf_reward, buf_mask, buf_action, buf_noise, buf_value = [ten.to(self.device) for ten in buffer]
+            buf_state, buf_hidden_in, buff_hidden_out, buf_reward, buf_mask, buf_action, buf_noise, buf_value = buffer#[ten.to(self.device) for ten in buffer]
             buf_len = buf_state.shape[0]
             '''get buf_r_sum, buf_logprob'''
             bs = 2 ** 10  # set a smaller 'BatchSize' when out of GPU memory.
             #buf_value = [self.cri_target(buf_state[i:i + bs]) for i in range(0, buf_len, bs)]
-            buf_value = torch.cat(buf_value, dim=0)
-            buf_logprob = self.network.get_old_logprob(buf_action, buf_noise)
+
+            #buf_value = torch.cat(buf_value, dim=0)
+            buf_logprob = self.cri.get_old_logprob(buf_action, buf_noise, buf_hidden_in)
 
             buf_r_sum, buf_adv_v = self.get_reward_sum(buf_len, buf_reward, buf_mask, buf_value)  # detach()
             buf_adv_v = (buf_adv_v - buf_adv_v.mean()) * (self.lambda_a_value / (buf_adv_v.std() + 1e-5))
@@ -764,33 +813,43 @@ class AgentSharedRecurrentPPO:
         # TODO: Convert samples from buffer to sequential
         samples = {
             "actions": buf_action,
-            "values": buf_value,
             "log_probs": buf_logprob,
             "advantages": buf_adv_v,
             "obs": buf_state,
-            'r_sum':buf_r_sum,
-            "hxs":buf_hidden,
+            'r_sum': buf_r_sum,
+            "hidden_in": buf_hidden_in,
+            "hidden_out": buff_hidden_out,
+            "values":buf_value,
             # The loss mask is used for masking the padding while computing the loss function.
             # This is only of significance while using recurrence.
             "loss_mask": buf_mask
         }
-        buffer.prepare_batch_dict(samples)
+
+        samples_flat = self.prepare_batch(samples)
+        # buffer.prepare_batch_dict(samples)
         # for i in repeat times for minibatch in batch
-        for update_i in range(repeat_times):
-            for mini_batch in self.recurrent_mini_batch_generator():
-
-                state = mini_batch['obs']
-
+        # hidden_state_critic = self.cri.init_recurent_cell_states(self.num_sequences, self.device)
+        # Stack sequences (target shape: (Sequence, Step, Data ...) and apply data to the samples dictionary
+        # Hidden state  dimensions (number of seq,bs,hidden_state_size)
+        # hidden = self.act.init_recurent_cell_states(self.sequence_length, self.device)
+        # Create mini batch generator
+        if batch_size > 64: batch_size /= 2
+        # for i in repeat times for minibatch in batch
+        for i in range(repeat_times):
+            for mini_batch in self.mini_batch_generator(samples_flat, batch_size):
+                state = mini_batch['obs'].float()
                 value = mini_batch['values']
                 r_sum = mini_batch['r_sum']
                 adv_v = mini_batch['advantages']
+                hidden_in = mini_batch['hidden_in']
+                hidden_out = mini_batch['hidden_out']
                 action = mini_batch['actions']
                 logprob = mini_batch['log_probs']
                 masks = mini_batch['loss_mask']
 
                 """ PPO Surrogate objective of Trust Region for shared layer network update"""
                 #Check get logprobl entrop
-                new_logprob, obj_entropy = self.network.get_logprob_entropy(state, action)  # it is obj_actor
+                new_logprob, obj_entropy = self.cri.get_logprob_entropy(state, action, hidden_out, self.sequence_length)  # it is obj_actor
                 ratio = (new_logprob - logprob.detach()).exp()
                 surrogate1 = adv_v * ratio
                 surrogate2 = adv_v * ratio.clamp(1 - self.ratio_clip, 1 + self.ratio_clip)
@@ -798,16 +857,16 @@ class AgentSharedRecurrentPPO:
                 obj_surrogate = self._masked_mean(obj_surrogate, masks)
 
                 # Value function loss
-
                 obj_critic = self.criterion(value, r_sum) / (r_sum.std() + 1e-6)
 
                 total_loss = -(obj_surrogate - self.vf_coef * obj_critic + self.lambda_entropy * obj_entropy)
 
-                self.optim_update(self.network, total_loss, self.network.parameters())
+                self.optim_update(self.cri_optim, total_loss, self.cri.parameters())
                 #self.soft_update(self.cri_target, self.cri, soft_update_tau) if self.cri_target is not self.cri else None
 
-        a_std_log = getattr(self.act, 'a_std_log', torch.zeros(1)).mean()
-        return obj_critic.item(), obj_actor.item(), a_std_log.item()  # logging_tuple
+        a_std_log = getattr(self.cri, 'a_std_log', torch.zeros(1)).mean()
+        return  {'network_loss':obj_critic.item(),
+                 'action_std_log':a_std_log.item() }  # logging_tuple
 
     def _masked_mean(self, tensor:torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
@@ -900,12 +959,152 @@ class AgentSharedRecurrentPPO:
             temp = list(map(list, zip(*traj)))  # 2D-list transpose
 
             ten_state = torch.stack(temp[0])
-            ten_hidden_state = torch.stack(temp[1])
-            ten_reward = torch.as_tensor(temp[2], dtype=torch.float32) * reward_scale
-            ten_mask = (1.0 - torch.as_tensor(temp[3], dtype=torch.float32)) * gamma
-            ten_action = torch.stack(temp[4])
-            ten_noise = torch.stack(temp[5])
 
-            traj[:] = (ten_state, ten_hidden_state, ten_reward, ten_mask, ten_action, ten_noise)
+            ten_hidden_state = (torch.stack(temp[1]), torch.stack(temp[2]))
+
+            ten_hidden_state_out = (torch.stack(temp[3]), torch.stack(temp[4]))
+            ten_reward = torch.as_tensor(temp[5], dtype=torch.float32) * reward_scale
+            ten_mask = (1.0 - torch.as_tensor(temp[6], dtype=torch.float32)) * gamma
+            ten_action = torch.stack(temp[7])
+            ten_noise = torch.stack(temp[8])
+            ten_value = torch.stack(temp[9]).unsqueeze(-1)
+
+
+            traj[:] = (ten_state, ten_hidden_state, ten_hidden_state_out, ten_reward, ten_mask, ten_action, ten_noise, ten_value)
 
         return traj_list
+
+    def pad_sequence(self, sequence:np.ndarray, target_length:int) -> np.ndarray:
+        delta_length = target_length - len(sequence)
+
+        sequence = torch.from_numpy(np.vstack(sequence).astype(np.float))
+
+        if delta_length <= 0:
+            return sequence
+
+        if len(sequence.shape) > 1:
+            padding = torch.zeros(((delta_length,) + sequence.shape[1:]), dtype = sequence.dtype)
+
+        else:
+            padding = torch.zeros(delta_length, dtype=sequence.dtype)
+        return torch.cat((sequence, padding), axis=0)
+
+
+    def prepare_batch(self, samples):
+
+
+        # Split data into sequences and apply zero-padding
+        # Retrieve the indices of dones as these are the last step of a whole episode
+
+
+        # Split obs, values, advantages, recurrent cell states, actions and log_probs into episodes and then into sequences
+        max_sequence_length = 1
+        # TODO: Change this for more generalizable modeling with done lists
+        done_index = len(samples['obs'])
+
+        for key, value in samples.items():
+            sequences = []
+            start_index = 0
+            #
+            # Split trajectory into episodes
+            episode = value[start_index:done_index + 1]
+
+            start_index = done_index + 1
+            # Split episodes into sequences
+            if ((key is not "hidden_in") and (key is not 'hidden_out')):
+
+                if self.sequence_length > 0:
+                    for start in range(0, len(episode), self.sequence_length):
+                        end = start + self.sequence_length
+                        sequences.append(episode[start:end])
+                    max_sequence_length = self.sequence_length
+                else:
+                    # If the sequence length is not set to a proper value, sequences will be based on whole episodes
+                    sequences.append(episode)
+                    max_sequence_length = len(episode) if len(
+                        episode) > max_sequence_length else max_sequence_length
+
+                # Apply zero-padding to ensure that each sequence has the same length
+                # Therfore we can train batches of sequences in parallel instead of one sequence at a time
+                for i, sequence in enumerate(sequences):
+
+                    sequences[i] = self.pad_sequence(sequence, max_sequence_length)
+
+                # Stack sequences (target shape: (Sequence, Step, Data ...) and apply data to the samples dictionary
+                samples[key] = torch.stack(sequences, axis=0)
+
+
+            if (key == "hidden_in" or key == "hidden_out") :
+                # Select only the very first recurrent cell state of a sequence and add it to the samples.
+
+                samples[key] = (samples[key][0].double(),samples[key][1].double())
+
+
+        # If the sequence length is based on entire episodes, it will be as long as the longest episode.
+        # Hence, this information has to be stored for the mini batch generation.
+        self.true_sequence_length = max_sequence_length
+
+        # Flatten all samples and convert them to a tensor
+        samples_flat = {}
+        for key, value in samples.items():
+            # size here is traj len / seq len
+
+            if not key == "hidden_in" and not key == "hidden_out":
+                #convert to seq len * sample
+                value = value.reshape(value.shape[0] * value.shape[1], *value.shape[2:])
+
+            else:
+
+                value = (
+                    value[0].reshape(value[0].shape[0] * value[0].shape[1], * value[0].shape[2:]),
+                    value[1].reshape(value[1].shape[0] * value[1].shape[1], *value[1].shape[2:])
+                    )
+
+
+            samples_flat[key] = value
+
+        return samples_flat
+
+    def mini_batch_generator(self, samples, batch_size):
+        """
+        Get flattened samples
+        :param samples: flattened samples after prepare batch func
+        :return:
+        """
+        num_sequences = len(samples['obs']) // self.true_sequence_length
+
+        num_sequences_per_batch = num_sequences // batch_size
+
+        num_sequences_per_batch = [num_sequences_per_batch] * batch_size
+        remainder = num_sequences % batch_size
+
+        for i in range(remainder):
+            num_sequences_per_batch[i] += 1
+
+        # Prepare indices,
+        indices = torch.arange(0,
+                               num_sequences * self.true_sequence_length,
+                               requires_grad=False)\
+            .reshape(num_sequences, self.true_sequence_length)
+
+        sequence_indices = torch.randperm(num_sequences)
+        start = 0
+
+        for n_sequences in num_sequences_per_batch:
+            end = start + n_sequences
+            mini_batch_indices = indices[sequence_indices[start:end]].reshape(-1)
+            mini_batch = {}
+            for key, value in samples.items():
+                if key != 'hidden_in' and key != 'hidden_out':
+                    mini_batch[key] = value[mini_batch_indices].to(self.device)
+                else:
+                    # Collect only the recurrent cell states
+                    mini_batch[key] = (
+                        value[0][mini_batch_indices].unsqueeze(0).to(self.device).float(),
+                        value[1][mini_batch_indices].unsqueeze(0).to(self.device).float(),
+                                       )
+
+                    #mini_batch[key] = value
+            start = end
+
+            yield mini_batch

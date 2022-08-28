@@ -467,7 +467,7 @@ class StockEnvTrade(BaseTradeEnv):
 
             # print(self.data['turbulence'])
 
-            self.turbulence = self.data["turbulence"].values[0]
+            self.turbulence = 0#self.data["turbulence"].values[0]
 
             # load next state
             # print("stock_shares:{}".format(self.state[29:]))

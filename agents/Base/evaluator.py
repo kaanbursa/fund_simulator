@@ -210,7 +210,8 @@ def get_episode_return_and_step_recurrent(env, act) -> (float, int):
         #TODO: CHECK if you have non discrete
         def get_action(_state, hidden_state):
             _state = torch.as_tensor(_state, dtype=torch.float32, device=device)
-            _action, hidden_state = act(_state.unsqueeze(0), hidden_state, sequence_length=1)
+            #hidden_state = (hidden_state[0].unsqueeze(0),hidden_state[1].unsqueeze(0))
+            _action, _, hidden_state = act(_state.unsqueeze(0), hidden_state, sequence_length=1)
             return _action.detach().cpu().numpy()[0], hidden_state
 
     state = env.reset()

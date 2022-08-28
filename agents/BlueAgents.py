@@ -1,7 +1,7 @@
 import torch
 from agents.Base.deepagents import AgentDDPG #, #AgentSAC, AgentTD3, AgentA2C
 from agents.agents.ppo import AgentPPO
-from agents.agents.rec_ppo import AgentRecurrentPPO
+from agents.agents.rec_ppo import AgentRecurrentPPO, AgentSharedRecurrentPPO
 from agents.Base.run import Arguments, train_and_evaluate
 from agents.wrappers.ObservationWrapper import NormalizedEnv
 from torch.utils.tensorboard import SummaryWriter
@@ -11,7 +11,10 @@ from utils.helper_training import *
 from data.preprocessing import *
 from env.BaseEnv import EnvConfig
 from utils.indicators import indicator_list, indicators_stock_stats
-MODELS = {"ddpg": AgentDDPG,  "ppo": AgentPPO, 'recurrent_ppo':AgentRecurrentPPO}
+
+from agents.Base.config import recurrent_config
+MODELS = {'shared_recurrent_ppo':AgentSharedRecurrentPPO,
+          'recurrent_ppo':AgentRecurrentPPO, 'PPO':AgentPPO} # OLD MOdels do not work
 OFF_POLICY_MODELS = ["ddpg", "td3", "sac"]
 ON_POLICY_MODELS = ["ppo", "a2c"]
 """MODEL_KWARGS = {x: config.__dict__[f"{x.upper()}_PARAMS"] for x in MODELS.keys()}
@@ -88,7 +91,7 @@ class DRLAgent:
         self.unique_trade_date = data[data.Date > self.config.start_trade].Date.unique()
         self.model_name = model_name
         self.population = train_config.population
-        self.agent = MODELS[model_type]()
+        self.agent = MODELS[model_type](recurrent_config)
 
         self.dataset_version = train_config.dataset_version
         self.config.hparams = model_kwargs
@@ -253,6 +256,80 @@ class DRLAgent:
         with open("outputs/runids.txt", "w") as f:
             self.runid += 1
             f.write(str(self.runid))
+
+    def shannons_demon(self, pct):
+        def check_diff(asset1, asset2, n):
+            diff = abs(asset1 - asset2)
+            if diff >= (asset2 * n):
+                return True
+            else:
+                return False
+
+        trade_data = data_split(
+            self.data,
+            start=self.unique_trade_date[0],
+            end=self.unique_trade_date[-1],
+        )
+        stocks = self.data.ticker.dropna().unique()
+        stock_dimension = len(stocks)
+        trade_data.Date = pd.to_datetime(trade_data.Date)
+        dolar = 10000
+        print(trade_data)
+        last_state = [dolar, trade_data.loc[0,'adjcp'],0]
+        trade_env = self.env_trade(trade_data,
+                                   trade_data,
+                                   time_window=0,
+                                   flag_days=[],
+                                   stock_dim=stock_dimension,
+                                   unique_trade_date=self.unique_trade_date,
+                                   turbulence_threshold=250,
+                                   initial=True,
+                                   config=self.env_config,
+                                   previous_state=last_state,
+                                   model_name=self.model_name,
+                                   iteration=1,
+                                   debug=False)
+
+        state = trade_env.reset()
+        done = False
+        i = 0
+        df = pd.DataFrame()
+        while not done:
+            current_dolar = state[0]
+            asset = state[2]
+            price_of_asset = state[1]
+            dolar_val_asset = asset * price_of_asset
+
+
+            # Checks if the difference between assets are bigger than 5%
+            if check_diff(current_dolar, dolar_val_asset, pct):
+                if dolar_val_asset > current_dolar:
+                    dolar_to_sell_from_asset = abs(current_dolar - dolar_val_asset)
+                    quantity_asset_to_sell = -1* (dolar_to_sell_from_asset / price_of_asset)
+                    action = np.array([quantity_asset_to_sell])
+                else:
+                    dolar_to_buy = abs(current_dolar - dolar_val_asset)
+                    quantity_asset_to_buy = dolar_to_buy / price_of_asset
+                    action = np.array([quantity_asset_to_buy])
+
+            else:
+                action = np.array([0])
+
+            new_state, reward, terminal, _ = trade_env.step(action)
+
+            if terminal:
+                done = True
+
+            state = new_state
+            i +=1
+            if i % 100 == 0:
+                dc ={'date':self.unique_trade_date[i], 'assets':dolar_val_asset + current_dolar}
+                print('Dolar value of assets', dolar_val_asset + current_dolar)
+                df = df.append(dc, ignore_index=True)
+
+        return df
+
+
 
     def run_pbt_prediction(self, total_timesteps=30000, time_frame=0, load=False,  model_to_load='', normalize: bool = False):
         start = time.time()
@@ -661,12 +738,13 @@ class DRLAgent:
                 while not done:
                     s_tensor = _torch.as_tensor((state,), device=device).float()
 
-                    a_tensor, hidden_state = act(s_tensor, hidden_state,
+                    a_tensor,_, hidden_state = act(s_tensor, hidden_state,
                                                  sequence_length=1)  # action_tanh = act.forward()
 
                     action = (
                         a_tensor.detach().cpu().numpy()[0]
                     )  # not need detach(), because with torch.no_grad() outside
+
 
                     state, reward, done, _ = env_trade.step(action)
 

@@ -77,8 +77,8 @@ class StockEnvTrain(BaseTradeEnv):
         else:
             #print(actions[:4])
             actions = actions * self.HMAX_NORMALIZE
-            if np.isnan(actions).any():
-                print(f'actions are nan, in {self.day} and actions are {actions}, state is : {self.state}')
+            #if np.isnan(actions).any():
+                #print(f'actions are nan, in {self.day} and actions are {actions}, state is : {self.state}')
 
             # actions = (actions.astype(int))
 
@@ -86,6 +86,7 @@ class StockEnvTrain(BaseTradeEnv):
                 np.array(self.state[1 : (self.stock_dim + 1)])
                 * np.array(self.state[(self.stock_dim + 1) : (self.stock_dim * 2 + 1)])
             )
+
             # print("begin_total_asset:{}".format(begin_total_asset))
 
             argsort_actions = np.argsort(actions[: self.stock_dim])
@@ -124,7 +125,8 @@ class StockEnvTrain(BaseTradeEnv):
             self.data = self.df.loc[self.day, :].dropna(subset=["ticker"])
             self.past_data = self.df.loc[self.day - self.time_window: self.day, ['adjcp', 'volume']]
             self.index = self.index_df.loc[self.day, :]
-
+            if self.state[2] < 0:
+                print('STate is minus')
             # load next state
 
             self.state = self._get_observation(initial=False)
@@ -164,6 +166,7 @@ class StockEnvTrain(BaseTradeEnv):
 
         self.state = self._get_observation(initial=True)
         # iteration += 1
+
         return self.state
 
     def render(self, mode="human"):

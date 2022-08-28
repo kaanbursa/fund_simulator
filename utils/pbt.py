@@ -35,7 +35,7 @@ def suggest_loguniform(name, low, high):
 def suggest_uniform(name, low, high):
     return np.random.uniform(low, high, 1)[0]
 
-def sample_own_ppo_params(hparams) -> Dict[str, Any]:
+def sample_ppo_params(hparams) -> Dict[str, Any]:
     """
 
     Sampler for PPO hyperparams.
@@ -87,6 +87,10 @@ def sample_own_ppo_params(hparams) -> Dict[str, Any]:
     new_hparams = {
         "eval_time_gap": eval_time_gap,
         "batch_size": batch_size,
+        "ent_coef":ent_coef,
+        "gae_lambda":gae_lambda,
+        "max_grad_norm":max_grad_norm,
+        "vf_coef":vf_coef,
         "gamma": gamma,
         "learning_rate": learning_rate,
         "target_step": target_step,

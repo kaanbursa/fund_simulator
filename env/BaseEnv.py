@@ -18,7 +18,7 @@ class EnvConfig:
     TRANSACTION_FEE_PERCENT = 0.001
     SHORT_FEE = 0.00005
     INDICATORS = indicator_list
-    OBSERVATIONS = len(indicator_list) + 2
+    OBSERVATIONS = len(INDICATORS) + 2
     INDEX_OBSERVATIONS = 3
     REWARD_INTERVAL = 1
     seed = 42
@@ -42,16 +42,20 @@ class BaseTradeEnv(gym.Env):
 
     def __init__(self, stock_dim, index_df, time_window, config=EnvConfig):
         #TODO: add function to calculate if the stock was sold for loss or profit
-        #TODO: add dataset building to have the ability to add features in order with stock
+        #TODO: add dataset building to have the ability to add features in order with stock oon load
         self.config = config
         self.time_window= time_window
         self.stock_dim = stock_dim
         self.index_df = index_df
+
+        #self.action_space = spaces.Discrete(self.stock_dim)
         self.action_space = spaces.Box(low=-1, high=1, shape=(self.stock_dim,))
         #self.index_dim = len(self.index_df.ticker.unique())
 
         obs_shape = 3 + self.stock_dim * self.config.OBSERVATIONS + (self.time_window * 2 * (self.stock_dim + 2)) #+ (self.index_dim * self.config.INDEX_OBSERVATIONS)
+
         self.state_dim = obs_shape
+
         self.action_dim = stock_dim
         self.max_step = 10000
         self.if_discrete = False
@@ -98,10 +102,10 @@ class BaseTradeEnv(gym.Env):
                     + self.data.adjcp.values.tolist()
                     + [0] * self.stock_dim
                     + data
-                    # + self.index.index_close.values.tolist()
+                    #+ self.index.index_close.values.tolist()
                     # + self.index.index_macd.values.tolist()
                     # + self.index.index_rsi.values.tolist()
-                    + [self.data.month.values.tolist()[0]]
+                    + [self.data.month.values.tolist()[0]] #TODO: LATER bring these back
                     + [self.data.day.values.tolist()[0]]
                 )
             else:

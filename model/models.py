@@ -8,6 +8,8 @@ import torch
 import optuna
 # RL models from stable-baselines
 from stable_baselines3 import A2C, PPO, DDPG, TD3, DQN, SAC
+
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from wandb.integration.sb3 import WandbCallback
@@ -27,10 +29,10 @@ from env.EnvStock_val import StockEnvValidation
 from env.OldTrade import OldStockEnvTrade
 from env.OldTrain import OldStockEnvTrain
 from utils.helper_training import *
-from utils.pbt import sample_ppo_params, sample_sac_params
+#from utils.pbt import sample_ppo_params, sample_sac_params
 
 # customized env
-#from utils.pbt import sample_ppo_params, optimize_ppo2
+from utils.pbt import sample_ppo_params#, optimize_ppo2
 from utils.indicators import indicator_list, indicators_stock_stats
 
 from data.Clustering import UnsupervisedLearning
@@ -78,7 +80,7 @@ class Trainer:
         debug = False,
         tensorboard=False,
     ):
-        model_dict = {"PPO": PPO, "A2C": A2C, 'DDPG':DDPG, 'TD3':TD3, 'DQN':DQN, 'SAC':SAC}
+        model_dict = {"PPO": PPO, "A2C": A2C, 'DDPG':DDPG, 'TD3':TD3, 'DQN':DQN, 'SAC':SAC, 'reccurent_ppo':RecurrentPPO}
         self.model_type = model
         self.policy = policy
         self.model = model_dict[model]
@@ -224,6 +226,7 @@ class Trainer:
                     )
                 ]
             )
+
         obs_trade = env_trade.reset()
 
         for i in range(len(trade_data.index.unique())):
@@ -1153,6 +1156,7 @@ class Trainer:
             )
 
 
+
             ## validation env
             validation = data_split(
                 self.dataset,
@@ -1247,7 +1251,7 @@ class Trainer:
                     #model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
                     #study = optuna.create_study()
                     #study.optimize(self.optimize_train, n_trials=100)
-                    obs_val = env_val.reset()
+
                     hparams = self.config.hparams
                     winner = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
                     winner_hparams = hparams
@@ -1260,6 +1264,7 @@ class Trainer:
                         "to ",
                         self.unique_trade_date[i - self.config.rebalance_window],
                     )
+                    obs_val = env_val.reset()
                     total_reward, end_total_asset = self.DRL_validation(
                         model=winner,
                         test_data=validation,

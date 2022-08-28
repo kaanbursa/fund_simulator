@@ -452,7 +452,6 @@ class ActorRecurrentPPO(nn.Module):
         :param sequence_length[int] sequence length is 1 for sampling
         :return: the output tensor.
         """
-
         state, (hxs, cxs) = self.rnn(state, rec_cel, sequence_length)
         return self.net(state).tanh(), (hxs, cxs)  # action.tanh()
 
@@ -462,6 +461,7 @@ class ActorRecurrentPPO(nn.Module):
         :param state[np.array]: the input state.
         :return: the action and added noise.
         """
+
         state, (hxs, cxs) = self.rnn(state, rec_cel, sequence_length)
         a_avg = self.net(state)
         a_std = self.a_std_log.exp()
@@ -908,32 +908,24 @@ class SharePPO(nn.Module):  # Pixel-level state version
         return q1, q2, logprob
 
 class ShareRecurrentPPO(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim, fc_mid_dim, config):
+    def __init__(self, hidden_dim, state_dim, action_dim):
         super().__init__()
 
-        self.config = config
-        if isinstance(state_dim, int):
-            # Shared embedded rec layer
-            self.recurrent_layer = RNNLSTMLayer(inputs_dim=state_dim, outputs_dim=hidden_dim, config=recurrent_config)
+        self.config = recurrent_config
+        self.hidden_state_size = hidden_dim
+        self.sequence_length = recurrent_config['sequence_length']
+        self.pdrop_out = recurrent_config['pdropout']
 
-        else:
-            self.enc_s = Conv2dNet(inp_dim=state_dim[2], out_dim=hidden_dim, image_size=state_dim[0])
-
-        self.lin_hidden = nn.Linear(hidden_dim, fc_mid_dim)
-        nn.init.orthogonal_(self.lin_hidden.weight, np.sqrt(2))
-
-        #Decouple policy and value functions
-        self.lin_policy = nn.Linear(fc_mid_dim, fc_mid_dim)
-        nn.init.orthogonal_(self.lin_policy.weight, np.sqrt(2))
+        self.recurrent_layer = RNNLSTMLayer(inputs_dim=state_dim,
+                                            outputs_dim=hidden_dim,
+                                            config=self.config)
 
 
-        self.lin_value = nn.Linear(fc_mid_dim, fc_mid_dim)
-        nn.init.orthogonal_(self.lin_value.weight, np.sqrt(2))
+        self.policy = nn.Sequential(nn.Linear(hidden_dim,hidden_dim),nn.Hardswish(),
+                                    nn.Linear(hidden_dim, action_dim))
+        layer_norm(self.policy[-1], std=0.1)
 
-        self.policy = nn.Linear(fc_mid_dim, action_dim)
-        nn.init.orthogonal_(self.policy.weight, np.sqrt(0.01))
-
-        self.value = nn.Linear(fc_mid_dim, 1)
+        self.value = nn.Linear(hidden_dim, 1)
         nn.init.orthogonal_(self.value.weight, 1)
 
         # TODO: Add auxiliary output
@@ -943,39 +935,42 @@ class ShareRecurrentPPO(nn.Module):
 
         #self.sqrt_2pi_log = np.log(np.sqrt(2 * np.pi))
 
-    def forward(self, s, rec_cell, seq_len):
+        self.a_std_log = nn.Parameter(torch.zeros((1, action_dim)) - 0.5, requires_grad=True)
+        self.sqrt_2pi_log = np.log(np.sqrt(2 * np.pi))
 
-        s, hidden = self.recurrent_layer(s, rec_cell, seq_len)
-        s = F.relu(self.lin_hidden(s))
+    def forward(self, s, rec_cell, sequence_length):
 
-        s_policy = F.relu(self.lin_policy(s))
+        state, hidden = self.recurrent_layer(s, rec_cell, sequence_length)
 
-        s_value = F.relu(self.lin_value(s))
+        value = self.value(state).reshape(-1)
+        action = self.policy(state)
 
-        value = self.value(s_value).reshape(-1)
 
-        pi = Categorical(logits=self.policy(s_policy))
-        a_noise, noise = self.get_action_noise(s)
+        #a_std = self.a_std_log.exp()
 
-        return pi, value, rec_cell, a_noise
+        #noise = torch.randn_like(a_avg)
+        #a_noise = a_avg + noise * a_std
+
+
+        return action, value, hidden
 
     def init_recurent_cell_states(self, num_sequences:int, device:torch.device) : #-> tuple[torch.Tensor, torch.Tensor]
         """Inıtializes the recurrent cell states"""
 
-        hxs = torch.zeros((num_sequences), self.recurrent_layer, dtype=torch.float32, device=device)
-        cxs = torch.zeros((num_sequences), self.recurrent_layer, dtype=torch.float32, device=device)
+        hxs = torch.zeros((num_sequences), self.hidden_state_size, dtype=torch.float32, device=device).unsqueeze(0)
+        cxs = torch.zeros((num_sequences), self.hidden_state_size, dtype=torch.float32, device=device).unsqueeze(0)
 
         return (hxs, cxs)
 
-    def get_action_noise(self, state):
-        s_ = self.enc_s(state)
-        a_avg = self.dec_a(s_)
+    def get_action_noise(self, a_avg):
+
+        #a_avg = self(state, rec_cell, seq_len)
         a_std = self.a_std_log.exp()
 
         # a_noise = torch.normal(a_avg, a_std) # same as below
         noise = torch.randn_like(a_avg)
         a_noise = a_avg + noise * a_std
-        return a_noise, noise
+        return a_noise
 
     def get_q_logprob(self, state, noise):
         s_ = self.enc_s(state)
@@ -995,14 +990,14 @@ class ShareRecurrentPPO(nn.Module):
         logprob = -(((a_avg - action) / a_std).pow(2) / 2 + self.a_std_log + self.sqrt_2pi_log).sum(1)
         return q1, q2, logprob
 
-    def get_logprob_entropy(self, state, action):
+    def get_logprob_entropy(self, state, action, hidden, seq_len):
         """
         Compute the log of probability with current network.
         :param state[np.array]: the input state.
         :param action[float]: the action.
         :return: the log of probability and entropy.
         """
-        a_avg = self.net(state)
+        a_avg, v,  hidden = self(state, hidden, seq_len)
         a_std = self.a_std_log.exp()
 
         delta = ((a_avg - action) / a_std).pow(2) * 0.5
@@ -1011,15 +1006,15 @@ class ShareRecurrentPPO(nn.Module):
         dist_entropy = (logprob.exp() * logprob).mean()  # policy entropy
         return logprob, dist_entropy
 
-    def get_old_logprob(self, _action, noise):  # noise = action - a_noise
+    def get_old_logprob(self, _action, noise, hidden):  # noise = action - a_noise
         """
         Compute the log of probability with old network.
         :param _action[float]: the action.
         :param noise[float]: the added noise when exploring.
         :return: the log of probability with old network.
         """
-
-        return self.act.get_old_logprob(_action, noise)  # old_logprob
+        delta = noise.pow(2) * 0.5
+        return -(self.a_std_log + self.sqrt_2pi_log + delta).sum(1)  # old_logprob
 
 
 
@@ -1124,6 +1119,7 @@ class RNNLSTMLayer(nn.Module):
         super(RNNLSTMLayer, self).__init__()
         recurrent_N = config['recurrent_n_layer']
 
+
         self.recurrent_layer = nn.LSTM(inputs_dim, outputs_dim, num_layers=recurrent_N,
                                        batch_first=True)
 
@@ -1165,6 +1161,7 @@ class RNNLSTMLayer(nn.Module):
             # Case: Model optimization given a sequence length > 1
             # Reshape the to be fed data to batch_size, sequence_length, data
             h_shape = tuple(h.size())
+
 
 
             h = h.reshape((h_shape[0] // sequence_length), sequence_length, h_shape[1])

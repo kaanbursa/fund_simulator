@@ -32,7 +32,7 @@ class RunningMeanStd(object):
 
 
 class NormalizedEnv(gym.core.Wrapper):
-    def __init__(self, env, ob=True, ret=True, clipob=10., cliprew=10., gamma=0.99, epsilon=1e-8):
+    def __init__(self, env, ob=True, ret=True, clipob=1., cliprew=10., gamma=0.99, epsilon=1e-8):
         super(NormalizedEnv, self).__init__(env)
         self.ob_rms = RunningMeanStd(shape=self.observation_space.shape) if ob else None
         self.ret_rms = RunningMeanStd(shape=(1,)) if ret else None

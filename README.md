@@ -15,6 +15,7 @@ optimize alpha generated and minimize risk.
 - [ ] W&B data and model versioning
 - [ ] Streamlit for analysis for training - **25%**
 - [x] Dynamic Clustering of stocks
+- [ ] Parallel environment
 - [ ] UI for agent training 
 - [x] Pretrain from date to date
 - [ ] Pretrain with Expert dataset

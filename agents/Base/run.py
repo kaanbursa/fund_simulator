@@ -46,10 +46,6 @@ class Arguments:  # [ElegantRL.2021.10.21]
             self.repeat_times = 2 ** 3  # collect target_step, then update network
             self.if_per_or_gae = False  # use PER: GAE (Generalized Advantage Estimation) for sparse reward
 
-
-
-
-
         '''Arguments for training'''
         self.gamma = 0.99  # discount factor of future rewards
         self.reward_scale = 2 ** 0  # an approximate target reward usually be closed to 256
@@ -157,9 +153,10 @@ def train_and_evaluate(args, learner_id=0):
         learning_rate_end = args.learning_rate['end']
     else:
         learning_rate_start = args.learning_rate
+    #TODO: get config from args
+    from agents.Base.config import recurrent_config
 
-
-    agent.init(net_dim=args.net_dim, gpu_id=args.learner_gpus[learner_id],
+    agent.init( net_dim=args.net_dim, gpu_id=args.learner_gpus[learner_id],
                state_dim=args.state_dim, action_dim=args.action_dim, env_num=args.env_num,
                learning_rate=learning_rate_start, if_per_or_gae=args.if_per_or_gae)
 
@@ -205,13 +202,14 @@ def train_and_evaluate(args, learner_id=0):
                                      observation_space=args.env.observation_space, device=agent.device)"""
             buffer = list()
             def update_buffer(_traj_list):
-
-                (ten_state, ten_hidden_state, ten_cell_state, ten_reward, ten_mask, ten_action, ten_noise, ten_values, ten_critic_hidden, ten_cri_cell) = _traj_list[0]
+                (ten_state, ten_hidden_state_in,
+                  ten_hidden_state_out,
+                  ten_reward, ten_mask, ten_action, ten_noise, ten_values) = _traj_list[0]
 
                 buffer [:] = (ten_state.squeeze(1),
-                              ten_hidden_state, ten_cell_state,
+                              ten_hidden_state_in, ten_hidden_state_out,
                               ten_reward, ten_mask, ten_action.squeeze(1),
-                              ten_noise.squeeze(1), ten_values.squeeze(1), ten_critic_hidden, ten_cri_cell)
+                              ten_noise.squeeze(1), ten_values.squeeze(1))
 
                 _steps, _r_exp = get_step_r_exp(ten_reward=ten_state[0])  # other = (reward, mask, action)
                 return _steps, _r_exp
@@ -273,13 +271,12 @@ def train_and_evaluate(args, learner_id=0):
 
             steps, r_exp = update_buffer(traj_list)
 
-        logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau) # (Actor loss, Critic Loss, Action_std_log)
-        logging_dict = dict((x,y) for x,y in zip(('actor_loss','critic_loss','Action_std_log'), logging_tuple))
+        logging_dict = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau) # (Actor loss, Critic Loss, Action_std_log)
 
         write_summary(logging_dict, ep)
 
         with torch.no_grad():
-            if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple, agent.is_recurrent)
+            if_reach_goal, if_save, r_avg, r_max = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_dict.values(), agent.is_recurrent)
 
             if_train = if_reach_goal
             cur_episode += 1
