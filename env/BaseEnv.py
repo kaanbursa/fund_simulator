@@ -23,7 +23,7 @@ class EnvConfig:
     REWARD_INTERVAL = 1
     seed = 42
     use_turbulance = False
-    stock_first_state = False
+    stock_first_state = True #
     quantity_buying = True # whether the agent buy shares or dollars
     add_index = False
     reward_grade = 0

@@ -31,7 +31,7 @@ class DataProcessor():
         return data
 
     def get_price(self, ticker, start, end=datetime.now()):
-        if self.type == 'Stocks':
+        if self.type == 'stocks':
 
             df = yf.download(ticker, start=start, end=end).reset_index()
             # df = stock.history(start=start, end=end)
@@ -140,6 +140,7 @@ class DataProcessor():
         stock["close"] = stock["adj close"]
         unique_ticker = stock.ticker.unique()
 
+
         for indicator in indicator_list:
             indicator_df = pd.DataFrame()
             for i in range(len(unique_ticker)):
@@ -156,6 +157,8 @@ class DataProcessor():
                     )
                 except Exception as e:
                     print(e)
+
+
             df = df.merge(
                 indicator_df[["ticker", "Date", indicator]], on=["ticker", "Date"], how="left"
             )
@@ -174,7 +177,7 @@ class DataProcessor():
 
         print("1. Getting prices of stocks and adding technical indicators")
 
-        path = "./datasets/" + name + ".csv"
+        path = "../datasets/" + name + ".csv"
         if os.path.exists(path):
             print('loading', path)
             sn_n = pd.read_csv(path)
@@ -188,6 +191,7 @@ class DataProcessor():
             df = self.get_price(self.tickers[0], start_date, end_date)
             # df = add_technical_indicator(df.rename(columns={"adjcp": "Adj Close"}), indicator_list)
             for tick in self.tickers[1:]:
+                print(tick)
                 stock = self.get_price(tick, start_date, end_date)
                 # stock = add_technical_indicator(
                 #    stock.sort_values(by=["ticker", "Date"])
@@ -211,7 +215,7 @@ class DataProcessor():
             print("4. Adding stock information for empty stock days")
 
             sn_n = add_stock_info_for_missing_days(df)
-            sn_n.to_csv("./datasets/" + name + ".csv", index=False)
+            sn_n.to_csv(path, index=False)
 
             if turbulance:
                 print("5. Calculating turbulance")
@@ -249,7 +253,7 @@ class DataProcessor():
         sn_n = sn_n.replace([np.inf, -np.inf], 0).sort_values(['Date', 'ticker'])
 
         if save:
-            sn_n.to_csv("./datasets/" + name + ".csv", index=False)
+            sn_n.to_csv(path, index=False)
 
         return sn_n, index_df
 

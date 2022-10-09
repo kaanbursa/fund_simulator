@@ -28,7 +28,7 @@ class StockEnvTrade(BaseTradeEnv):
         flag_days=None,
         time_window=0,
         day=0,
-        turbulence_threshold=140,
+        turbulence_threshold=0,
         initial=True,
         previous_state=[],
         model_name="",
@@ -95,6 +95,7 @@ class StockEnvTrade(BaseTradeEnv):
         self.iteration = iteration
         self.total_buy_orders = 0
         self.total_sell_orders = 0
+        self.use_turbulance = False
 
     def _sell_stock(self, index, action):
         # perform sell action based on the sign of the action
@@ -211,6 +212,7 @@ class StockEnvTrade(BaseTradeEnv):
 
 
     def _buy_stock(self, index, action):
+        #TODO: Change stock first buying order
         # perform buy action based on the sign of the action
         if not self.use_turbulance:
             if self.state[1 + index] > 0:
@@ -218,7 +220,7 @@ class StockEnvTrade(BaseTradeEnv):
                 # print('available_amount:{}'.format(available_amount))
                 if available_amount != 0:
                     amount = min(available_amount, action)
-                    # print('Buy amount', amount, action)
+
                     # update balance
                     self.state[0] -= (
                             self.state[index + 1]
@@ -390,7 +392,8 @@ class StockEnvTrade(BaseTradeEnv):
                 print('Printing actions from the agent ',actions)
             # actions = (actions.astype(int))
 
-            if self.turbulence >= self.turbulence_threshold:
+            if self.turbulence > self.turbulence_threshold:
+
 
                 actions = np.array([-self.HMAX_NORMALIZE] * self.stock_dim)
 
@@ -406,6 +409,7 @@ class StockEnvTrade(BaseTradeEnv):
             sell_index = argsort_actions[: np.where(actions < 0)[0].shape[0]]
 
             buy_index = argsort_actions[::-1][: np.where(actions > 0)[0].shape[0]]
+
 
             # TODO: If it is flag day dont buy or sell at that day
             self.date = pd.to_datetime(self.unique_trade_date[self.day + 1], format="%Y-%m-%d")

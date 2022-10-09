@@ -29,7 +29,8 @@ from env.EnvStock_val import StockEnvValidation
 from env.OldTrade import OldStockEnvTrade
 from env.OldTrain import OldStockEnvTrain
 from utils.helper_training import *
-#from utils.pbt import sample_ppo_params, sample_sac_params
+#from utils.pbt import sample_ppo_params, sample_sac_params, sample
+from utils.pbt import sample_recurrent_ppo_params, sample_sb_recurrent
 
 # customized env
 from utils.pbt import sample_ppo_params#, optimize_ppo2
@@ -83,12 +84,14 @@ class Trainer:
         model_dict = {"PPO": PPO, "A2C": A2C, 'DDPG':DDPG, 'TD3':TD3, 'DQN':DQN, 'SAC':SAC, 'reccurent_ppo':RecurrentPPO}
         self.model_type = model
         self.policy = policy
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = model_dict[model]
         self.dataset_version = dataset_version
         self.env_train = env_train
         self.env_val = env_val
         self.env_trade = env_trade
         self.config = config
+        print(self.config.hparams)
         self.model_name = model_name
         self.total_reward = 0
         self.env_config = env_config
@@ -135,10 +138,12 @@ class Trainer:
         start = time.time()
         #build_and_log_model(model=self.model, model_alias='PPO', model_name=self.model_name, config=hparams)
         model_path= f"{self.config.TRAINED_MODEL_DIR}/{self.model_name}"
+        #hparams['policy_kwargs']['device'] = self.device
         if self.tensorboard:
             model = self.model(
                 self.policy,
                 env_train,
+
                 callback = WandbCallback(
                     gradient_save_freq=100,
                     model_save_path=model_path,
@@ -151,6 +156,7 @@ class Trainer:
             model = self.model(
                 self.policy,
                 env_train,
+
                 **hparams,
             )
         if load:
@@ -233,6 +239,7 @@ class Trainer:
 
             action, _states = model.predict(obs_trade)
 
+
             obs_trade, rewards, dones, info = env_trade.step(action)
 
             total_reward = sum(rewards)
@@ -280,10 +287,12 @@ class Trainer:
 
         sampler = {
             'PPO':sample_ppo_params(hyperparam_names),
-            'SAC':sample_sac_params(hyperparam_names)
+            #'SAC':sample_sac_params(hyperparam_names)
+            'reccurent_ppo': sample_sb_recurrent(hyperparam_names),
         }
 
         new_hparams = sampler[self.model_type]
+
 
         return new_hparams
 
@@ -943,7 +952,7 @@ class Trainer:
                     # ====================================
                     hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
                     hparams['seed'] = seed
-                    hparams['device'] = 'cuda'
+
                 except:
                     print('Model destabilized with params: '
                           , ' Creating new params')
@@ -1046,14 +1055,14 @@ class Trainer:
 
         self.unique_trade_date = self.dataset[self.dataset.Date >= self.config.start_trade].Date.unique()
 
-        try:
+        """try:
             load_and_log(dataset=[],
                          description="Fund simulator for risk management",
                          indicator_list=self.config.indicator_list,
                          stock_list=[]
                          )
         except:
-            print('Error using wandb')
+            print('Error using wandb')"""
 
 
         self.last_state_ensemble = []
@@ -1077,6 +1086,9 @@ class Trainer:
         #sched_LR = LinearSchedule(total_timesteps, 0.0005, 0.00001)
 
         start = time.time()
+
+
+        winner_pool = [self.config.hparams]
 
 
         for i in range(
@@ -1193,16 +1205,30 @@ class Trainer:
 
             print(f"======Training Agents with the population of {self.population}========")
             reward = -100
+
             seed = self.config.hparams['seed']
             hparams = self.config.hparams
             hparams['seed'] = seed
             winner_hparams = dict()
 
-            for agent in range(self.population):
-                if self.population > 1: # If Population based training is being used
+            if self.population > 1:
+
+                population = winner_pool.copy()
+                new_agents = [self.exploit_and_explore(hyperparam_names=self.config.hparams) for _ in
+                             range(self.population)]
+
+                population = population + new_agents
+                idx  = 0
+                for hparam in population:
+                    print(hparam)
+
                     #hparams["learning_rate"] = sched_LR.value
                     try:
-                        model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load, model_to_load=model_to_load)
+                        model_rec_ppo = self.train_model(env_train,
+                                                         hparam,
+                                                         timesteps=timesteps,
+                                                         load=load,
+                                                         model_to_load=model_to_load)
                         #TODO: Try different seasons for validations pick the top reward
                         total_reward = 0
                         # Validation For different market conditions
@@ -1230,24 +1256,26 @@ class Trainer:
                             test_obs=obs_val,
                         )
                         print(f'Reward for the period is {period_reward}')
-                        total_reward += end_total_asset
+                        #total_reward = end_total_asset
 
-                        if total_reward > reward:
-                            print(f"Agent #{agent} has better performance for the training period with total reward: {total_reward}")
-                            reward = total_reward
+                        if end_total_asset > reward:
+                            print(f"Agent #{idx} has better performance for the training period with total asset: {end_total_asset}")
+                            reward = end_total_asset
                             winner = model_rec_ppo
-                            winner_hparams = hparams
+                            winner_hparams = hparam
+                        idx += 1
                         # ====================================
-                        hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
-                        hparams['seed'] = seed
-                        hparams['device'] = 'cuda'
-                    except:
+                        #hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
+                        hparam['seed'] = seed
+
+                    except Exception as e:
                         print('Model destabilized with params: '
                               , ' Creating new params')
+                        print(e)
                         hparams = self.exploit_and_explore(hyperparam_names=self.config.hparams)
 
                         hparams['seed'] = seed
-                else: # Use optuna for hyperparameter tuning
+            else: # Use optuna for hyperparameter tuning
                     #model_rec_ppo = self.train_model(env_train, hparams, timesteps=timesteps, load=load)
                     #study = optuna.create_study()
                     #study.optimize(self.optimize_train, n_trials=100)
@@ -1272,13 +1300,14 @@ class Trainer:
                         test_obs=obs_val,
                     )
                     print("Total reward at validation for Reccurent PPO", total_reward)
-
+            winner_pool.append(winner_hparams)
             self._save_model_info(
                 winner_hparams,
                 reward,
                 self.unique_trade_date[i - self.config.rebalance_window - self.config.validation_window - time_frame],
                 self.unique_trade_date[i - self.config.rebalance_window]
             )
+            reward  = -100
             sharpe_rec_ppo = get_validation_sharpe(i)
             print("Sharpe Ratio: ", sharpe_rec_ppo)
             print('='*80)
