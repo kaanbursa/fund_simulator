@@ -1,3 +1,4 @@
+from __future__ import print_function
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -9,7 +10,42 @@ from datetime import date, timedelta, datetime
 import ccxt
 import csv
 from pathlib import Path
+
+import sys
+import threading
+from time import sleep
+try:
+    import thread
+except ImportError:
+    import _thread as thread
+
+
 import enum
+
+def quit_function(fn_name):
+    # print to stderr, unbuffered in Python 2.
+    print('{0} took too long'.format(fn_name), file=sys.stderr)
+    sys.stderr.flush() # Python 3 stderr is likely buffered.
+    raise Exception
+    #thread.interrupt_main() # raises KeyboardInterrupt
+
+def exit_after(s):
+    '''
+    use as decorator to exit process if
+    function takes longer than s seconds
+    '''
+    def outer(fn):
+        def inner(*args, **kwargs):
+            timer = threading.Timer(s, quit_function, args=[fn.__name__])
+            timer.start()
+            try:
+                result = fn(*args, **kwargs)
+            finally:
+                timer.cancel()
+            return result
+        return inner
+    return outer
+
 
 class DataProcessor():
     def __init__(self, type:str, tickers:list, start:str, end:datetime):
@@ -32,8 +68,20 @@ class DataProcessor():
 
     def get_price(self, ticker, start, end=datetime.now()):
         if self.type == 'stocks':
+            @exit_after(10)
+            def download():
+                df = yf.download(ticker, start=start, end=end).reset_index()
+                return df
 
-            df = yf.download(ticker, start=start, end=end).reset_index()
+            try:
+                df= download()
+
+            except Exception as e:
+                df = pd.DataFrame(columns=["Date","Open","High","Low","Close"])
+                print(e)
+
+
+
             # df = stock.history(start=start, end=end)
             # Calculate ADJ Close
             # df = calculate_adjusted_close_prices_iterative(df, 'Close').reset_index()
@@ -178,20 +226,33 @@ class DataProcessor():
         print("1. Getting prices of stocks and adding technical indicators")
 
         path = "../datasets/" + name + ".csv"
+        cont = True
         if os.path.exists(path):
             print('loading', path)
             sn_n = pd.read_csv(path)
-            if turbulance and 'turbulence' not in sn_n.columns:
-                print('Calculating turbulance')
+            loaded_tickers = sn_n.ticker.unique()
 
-                sn_n = sn_n.reset_index().sort_values(by=["ticker", "Date"])
-                sn_n = add_turbulance(sn_n)
+            diff = list(set(self.tickers) - set(loaded_tickers))
+            if len(diff) == 0:
 
-        else:
+                if turbulance and 'turbulence' not in sn_n.columns:
+                    print('Calculating turbulance')
+
+                    sn_n = sn_n.reset_index().sort_values(by=["ticker", "Date"])
+                    sn_n = add_turbulance(sn_n)
+                cont = False
+                df = sn_n
+            else :
+                self.tickers = diff
+
+
+        elif cont:
             df = self.get_price(self.tickers[0], start_date, end_date)
             # df = add_technical_indicator(df.rename(columns={"adjcp": "Adj Close"}), indicator_list)
+            i = 0
             for tick in self.tickers[1:]:
                 print(tick)
+
                 stock = self.get_price(tick, start_date, end_date)
                 # stock = add_technical_indicator(
                 #    stock.sort_values(by=["ticker", "Date"])
@@ -201,10 +262,16 @@ class DataProcessor():
                 # )
 
                 df = pd.concat([df, stock])
+                if i == 10:
+                    print('Saving checkpoint')
+                    df.to_csv(path, index=False)
+                i += 1
+
             df = df[(df.Date >= pd.to_datetime(start_date)) & (df.Date <= pd.to_datetime(end_date))]
             df = self.add_technical_indicator(df.rename(columns={"adjcp": "Adj Close"}).sort_values(by=["ticker", "Date"])
                                          , indicator_list)
             print("2. Saving processed csv as stocks " + name + ".csv")
+            df.to_csv(path, index=False)
             print("Total tickers: ", len(df.ticker.unique()))
             print("3. Adding company categories")
             try:
@@ -214,18 +281,18 @@ class DataProcessor():
             df = df.fillna(0)
             print("4. Adding stock information for empty stock days")
 
-            sn_n = add_stock_info_for_missing_days(df)
-            sn_n.to_csv(path, index=False)
+        sn_n = add_stock_info_for_missing_days(df)
+        sn_n.to_csv(path, index=False)
 
-            if turbulance:
-                print("5. Calculating turbulance")
-                # Ticker first for turbulance calculation
-                sn_n = sn_n.reset_index().sort_values(by=["ticker", "Date"])
+        if turbulance:
+            print("5. Calculating turbulance")
+            # Ticker first for turbulance calculation
+            sn_n = sn_n.reset_index().sort_values(by=["ticker", "Date"])
 
-                sn_n = self.add_turbulance(sn_n)
-                # print("Total tickers: ", len(sn_n.ticker.unique()))
-            else:
-                sn_n['turbulence'] = 0
+            sn_n = self.add_turbulance(sn_n)
+            # print("Total tickers: ", len(sn_n.ticker.unique()))
+        else:
+            sn_n['turbulence'] = 0
         # else:
         #    sn_n['turbulence'] = 0
         #    sn_n = sn_n.reset_index(drop=True)
@@ -470,12 +537,19 @@ def create_and_preprocess_dataset(company_dictionary, start, end, indices):
 
 
 def add_stock_info_for_missing_days(df):
+    #TODO: optimize
     sn_n = df.copy()
-    for date in df.Date.unique():
-        for tick in df.ticker.unique():
-            if tick not in df[df.Date == date].ticker.unique():
-                d = {"ticker": tick, "Date": date}
-                sn_n = sn_n.append(d, ignore_index=True)
+    first_date = sn_n.sort_values(['Date']).iloc[0,:].Date.values.tolist()[0]
+
+    for tick in df.ticker.unique():
+        stock = df[df.ticker == tick]
+        first_date_of_stock = stock.sort_values(['Date']).iloc[0,:].Date.values.tolist()[0]
+        for date in sn_n[sn_n.Date <= first_date_of_stock].Date.unique():
+
+            d = {"ticker": tick, "Date": date}
+            sn_n = sn_n.append(d, ignore_index=True)
+
+
     return sn_n
 
 def add_correlation_matrix(df):
